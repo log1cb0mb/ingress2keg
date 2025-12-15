@@ -1,0 +1,102 @@
+# Standard Gateway API Timeout Test
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Purpose: Demonstrate PORTABLE timeout configuration using standard Gateway API
+#          (works with any Gateway API implementation, not just KGateway)
+#
+# Comparison:
+#   - THIS FILE: Standard Gateway API (HTTPRoute.timeouts)
+#   - 02-comprehensive-test-trafficpolicy.yaml: KGateway-specific (TrafficPolicy.timeouts)
+#
+# NGINX Equivalent:
+#   nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+#   nginx.ingress.kubernetes.io/proxy-send-timeout: "60"
+#
+# Reference: https://gateway-api.sigs.k8s.io/geps/gep-1742/
+#
+# ═══════════════════════════════════════════════════════════════════════════
+
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: standard-timeout-route
+  namespace: ingress2kgateway
+  labels:
+    app: standard-timeout-test
+    test-type: gateway-api-standard
+    portability: upstream-compatible
+spec:
+  parentRefs:
+  - name: external-gateway
+    namespace: ingress2kgateway
+    sectionName: https
+  
+  hostnames:
+  - "i2g.${DOMAIN}"
+  
+  rules:
+  # ═══════════════════════════════════════════════════════════════════════
+  # Test Route: Standard Gateway API Timeouts
+  # ═══════════════════════════════════════════════════════════════════════
+  #
+  # Timeouts:
+  #   - request: 60s (total time for request/response cycle)
+  #   - backendRequest: 30s (time for backend to respond)
+  #
+  # ═══════════════════════════════════════════════════════════════════════
+  - matches:
+    - path:
+        type: PathPrefix
+        value: "/api/standard/timeout/"
+    
+    # Standard Gateway API Timeouts (GEP-1742)
+    timeouts:
+      request: 60s          # Total time for entire request/response cycle
+      backendRequest: 30s   # Time for backend to start responding
+    
+    backendRefs:
+    - name: echo-server
+      port: 8080
+
+# ═══════════════════════════════════════════════════════════════════════════
+# COMPARISON: Two Ways to Configure Timeouts
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# ┌─────────────────────────────────────────────────────────────────────────┐
+# │ METHOD 1: Standard Gateway API (THIS FILE)                              │
+# │ ────────────────────────────────────────────────────────────────────────│
+# │ API: gateway.networking.k8s.io/v1 HTTPRoute                             │
+# │ Portability: ✅ Works with ANY Gateway API implementation               │
+# │                                                                         │
+# │ Fields:                                                                 │
+# │   - timeouts.request: Total request/response time                       │
+# │   - timeouts.backendRequest: Time for backend to respond                │
+# │                                                                         │
+# │ Reference: https://gateway-api.sigs.k8s.io/geps/gep-1742/               │
+# └─────────────────────────────────────────────────────────────────────────┘
+#
+# ┌─────────────────────────────────────────────────────────────────────────┐
+# │ METHOD 2: KGateway TrafficPolicy (02-comprehensive-test-trafficpolicy)  │
+# │ ────────────────────────────────────────────────────────────────────────│
+# │ API: gateway.kgateway.dev/v1alpha1 TrafficPolicy                        │
+# │ Portability: ❌ KGateway-specific (vendor lock-in)                      │
+# │                                                                         │
+# │ Fields:                                                                 │
+# │   - timeouts.request: Same as standard                                  │
+# │   - timeouts.streamIdle: Idle time on stream (NOT in standard)          │
+# │                                                                         │
+# │ Use when: Need streamIdle timeout or other TrafficPolicy features       │
+# └─────────────────────────────────────────────────────────────────────────┘
+#
+# ═══════════════════════════════════════════════════════════════════════════
+# NGINX → Gateway API Timeout Mapping
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# | NGINX Annotation | Standard Gateway API | KGateway TrafficPolicy |
+# |------------------|---------------------|------------------------|
+# | proxy-read-timeout | timeouts.request | timeouts.request |
+# | proxy-send-timeout | timeouts.backendRequest | timeouts.streamIdle |
+# | proxy-connect-timeout | N/A | BackendConfigPolicy.connectTimeout |
+#
+# ═══════════════════════════════════════════════════════════════════════════

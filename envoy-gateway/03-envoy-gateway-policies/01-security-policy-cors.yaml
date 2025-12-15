@@ -1,0 +1,77 @@
+# SecurityPolicy for CORS Configuration
+# Ref: https://gateway.envoyproxy.io/docs/tasks/security/cors/
+#
+# NGINX annotations covered:
+#   - enable-cors: "true"
+#   - cors-allow-origin / cors-allow-origins
+#   - cors-allow-methods
+#   - cors-allow-headers
+#   - cors-allow-credentials
+#   - cors-expose-headers
+#   - cors-max-age
+
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: SecurityPolicy
+metadata:
+  name: cors-policy
+  namespace: ingress2envoygateway
+  labels:
+    test: cors
+spec:
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: comprehensive-test-route
+  
+  cors:
+    # AllowOrigins is a simple string array (not objects)
+    # Supports: exact URLs, wildcard subdomains (*.example.com), or "*" for any
+    allowOrigins:
+    - "http://localhost:4200"
+    - "http://localhost:5004"
+    # Wildcard subdomain matching
+    # NGINX: cors-allow-origin: "https://*.${DOMAIN}"
+    - "https://*.${DOMAIN}"
+    
+    allowMethods:
+    - GET
+    - POST
+    - PUT
+    - DELETE
+    - PATCH
+    - OPTIONS
+    
+    allowHeaders:
+    - keep-alive
+    - user-agent
+    - x-requested-with
+    - if-modified-since
+    - cache-control
+    - content-type
+    - token
+    - account
+    - api-version
+    - x-trace-id
+    - authorization
+    
+    # exposeHeaders: Headers exposed to client-side scripts (Access-Control-Expose-Headers)
+    # NGINX: cors-expose-headers: "Content-Disposition"
+    exposeHeaders:
+    - Content-Disposition              # For file downloads (from Store production)
+    - X-Request-Id                     # For request tracing
+    - x-envoy-upstream-service-time    # Envoy adds this - verifiable in tests
+    
+    # allowCredentials: Allow cookies/auth headers in CORS requests
+    # NGINX: cors-allow-credentials: "true"
+    allowCredentials: true
+    
+    # maxAge: How long preflight responses can be cached (seconds)
+    # NGINX: cors-max-age: 86400
+    maxAge: 86400s  # 24 hours
+
+# Test 4 Validation:
+# 1. Preflight (OPTIONS) request should get CORS headers
+# 2. Access-Control-Allow-Origin should match request Origin
+# 3. Access-Control-Expose-Headers should include Content-Disposition
+# 4. Access-Control-Allow-Credentials should be true

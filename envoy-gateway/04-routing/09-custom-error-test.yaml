@@ -1,0 +1,46 @@
+# HTTPRoute for Custom HTTP Errors testing (Test 26)
+# NGINX: custom-http-errors: 503
+# Envoy Gateway: BackendTrafficPolicy.responseOverride (EG-specific feature!)
+#
+# This is a feature that KGateway OSS LACKS but Envoy Gateway HAS!
+
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: custom-error-test-route
+  namespace: ingress2envoygateway
+  labels:
+    app: custom-error-test
+    test: custom-http-errors-26
+spec:
+  parentRefs:
+  - name: external-gateway
+    namespace: ingress2envoygateway
+    sectionName: https
+  
+  hostnames:
+  - "eg.${DOMAIN}"
+  
+  rules:
+  - matches:
+    - path:
+        type: PathPrefix
+        value: "/api/custom-error-test"
+    backendRefs:
+    - name: flaky-backend  # Always returns 503
+      port: 8080
+
+# Test 26 Validation:
+# 1. Request to /api/custom-error-test
+# 2. Flaky backend returns 503
+# 3. Envoy Gateway intercepts 503 via responseOverride
+# 4. Returns custom JSON error instead of backend's raw 503
+#
+# curl https://eg.${DOMAIN}/api/custom-error-test
+# Expected: Custom JSON error with "Service Temporarily Unavailable"
+#
+# NGINX → Envoy Gateway Mapping:
+#   custom-http-errors: 503 → BackendTrafficPolicy.responseOverride
+#
+# This is a MAJOR ADVANTAGE of Envoy Gateway over KGateway OSS!

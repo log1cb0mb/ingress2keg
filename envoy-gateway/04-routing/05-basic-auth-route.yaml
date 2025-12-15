@@ -1,0 +1,37 @@
+# HTTPRoute for Basic Authentication testing
+# NGINX: auth-type: basic, auth-secret
+# Envoy Gateway: SecurityPolicy.basicAuth attached to this route
+
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: basic-auth-route
+  namespace: ingress2envoygateway
+  labels:
+    app: basic-auth-test
+    test: basic-auth-20
+spec:
+  parentRefs:
+  - name: external-gateway
+    namespace: ingress2envoygateway
+    sectionName: https
+  
+  hostnames:
+  - "eg.${DOMAIN}"
+  
+  rules:
+  - matches:
+    - path:
+        type: PathPrefix
+        value: "/api/basic-auth/protected"
+    backendRefs:
+    - name: echo-server
+      port: 8080
+
+# Test 20 Validation:
+# 1. Request without credentials → 401 Unauthorized
+# 2. Request with valid credentials (basicuser:basicpass) → 200 OK
+# 3. Request with invalid credentials → 401 Unauthorized
+#
+# curl -u basicuser:basicpass https://eg.${DOMAIN}/api/basic-auth/protected

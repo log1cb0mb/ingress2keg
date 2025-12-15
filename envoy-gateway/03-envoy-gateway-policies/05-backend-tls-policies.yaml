@@ -1,0 +1,136 @@
+# Backend TLS Policies - Testing 3 scenarios
+#
+# NGINX equivalent (2 annotations):
+#   nginx.ingress.kubernetes.io/configuration-snippet: |
+#     proxy_ssl_name "nginx-tls.ingress2envoygateway.svc.cluster.local";
+#   nginx.ingress.kubernetes.io/proxy-ssl-secret: ingress2envoygateway/nginx-tls-client-cert
+#
+# Test Scenarios (mirroring KGateway approach):
+#   17a: Standard BackendTLSPolicy (simple TLS) - PORTABLE
+#   17b: Envoy Gateway Backend resource (simple TLS with CA validation)
+#   17c: Envoy Gateway Backend resource (mTLS with client cert)
+#
+# References:
+#   - Simple TLS: https://gateway.envoyproxy.io/docs/tasks/security/backend-tls/
+#   - mTLS: https://gateway.envoyproxy.io/docs/tasks/security/backend-mtls/
+
+---
+# =============================================================================
+# Test 17a: Standard Gateway API BackendTLSPolicy (Simple TLS / One-way TLS)
+# =============================================================================
+# This is the PORTABLE option - works with any Gateway API implementation
+# Equivalent to: proxy_ssl_name "hostname"
+#
+# Status: GA (Standard Channel since v1.4.0)
+# Reference: https://gateway-api.sigs.k8s.io/api-types/backendtlspolicy/
+
+apiVersion: gateway.networking.k8s.io/v1
+kind: BackendTLSPolicy
+metadata:
+  name: nginx-tls-standard
+  namespace: ingress2envoygateway
+  labels:
+    app: nginx-tls
+    test: backend-tls-17a
+spec:
+  targetRefs:
+  - group: ""
+    kind: Service
+    name: nginx-tls
+  validation:
+    # hostname is the SNI - equivalent to proxy_ssl_name
+    hostname: nginx-tls.ingress2envoygateway.svc.cluster.local
+    
+    # CA certificate for validating backend's certificate
+    # Envoy Gateway supports Secret directly (cert-manager creates nginx-tls-ca-secret)
+    caCertificateRefs:
+    - name: nginx-tls-ca-secret
+      group: ""
+      kind: Secret
+
+---
+# =============================================================================
+# Test 17b: Envoy Gateway Backend Resource (Simple TLS with CA validation)
+# =============================================================================
+# Envoy Gateway-specific option for one-way TLS using Backend resource
+# Equivalent to KGateway's BackendConfigPolicy with simpleTLS: true
+#
+# Reference: https://gateway.envoyproxy.io/docs/tasks/security/backend-tls/
+
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: Backend
+metadata:
+  name: nginx-tls-simple-backend
+  namespace: ingress2envoygateway
+  labels:
+    app: nginx-tls
+    test: backend-tls-17b
+spec:
+  endpoints:
+  - fqdn:
+      hostname: nginx-tls.ingress2envoygateway.svc.cluster.local
+      port: 8443
+  tls:
+    # CA certificate for validating backend's server certificate (simple TLS)
+    # Only caCertificateRefs = one-way TLS (no client cert)
+    caCertificateRefs:
+    - group: ""
+      kind: Secret
+      name: nginx-tls-ca-secret
+    # SNI hostname for the TLS handshake
+    sni: nginx-tls.ingress2envoygateway.svc.cluster.local
+
+---
+# =============================================================================
+# Test 17c: Envoy Gateway Backend Resource (mTLS with client certificate)
+# =============================================================================
+# Envoy Gateway-specific option for mutual TLS using Backend resource
+# Gateway presents client certificate to backend for authentication
+# Equivalent to KGateway's BackendConfigPolicy without simpleTLS (mTLS mode)
+#
+# Reference: https://gateway.envoyproxy.io/docs/tasks/security/backend-mtls/
+
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: Backend
+metadata:
+  name: nginx-tls-mtls-backend
+  namespace: ingress2envoygateway
+  labels:
+    app: nginx-tls
+    test: backend-tls-17c
+spec:
+  endpoints:
+  - fqdn:
+      hostname: nginx-tls.ingress2envoygateway.svc.cluster.local
+      port: 8443
+  tls:
+    # CA certificate for validating backend's server certificate
+    caCertificateRefs:
+    - group: ""
+      kind: Secret
+      name: nginx-tls-ca-secret
+    
+    # Client certificate for mTLS - gateway presents this to backend
+    # Secret must contain tls.crt and tls.key
+    clientCertificateRef:
+      group: ""
+      kind: Secret
+      name: nginx-tls-client-secret
+      namespace: ingress2envoygateway
+    
+    # SNI hostname for the TLS handshake
+    sni: nginx-tls.ingress2envoygateway.svc.cluster.local
+
+# =============================================================================
+# NGINX → Envoy Gateway Mapping:
+# =============================================================================
+#
+# | NGINX | Standard Gateway API | Envoy Gateway Backend |
+# |-------|---------------------|----------------------|
+# | proxy_ssl_name | validation.hostname | tls.sni |
+# | CA validation | caCertificateRefs | tls.caCertificateRefs |
+# | proxy-ssl-secret (client) | N/A (not in GA) | tls.clientCertificateRef |
+#
+# Test 17a: Standard BackendTLSPolicy → Portable, simple TLS only
+# Test 17b: Backend with caCertificateRefs → Envoy Gateway simple TLS
+# Test 17c: Backend with clientCertificateRef → Envoy Gateway mTLS

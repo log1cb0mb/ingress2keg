@@ -1,0 +1,64 @@
+# TLSRoute for TLS Passthrough testing
+# NGINX: ssl-passthrough: 'true'
+# Gateway API: Gateway (tls.mode: Passthrough) + TLSRoute
+#
+# Key: Use dedicated service WITHOUT BackendTLSPolicy to ensure raw TCP passthrough
+# Reference: https://gateway-api.sigs.k8s.io/guides/tls/
+
+---
+# Separate Service for TLS Passthrough (no BackendTLSPolicy attached)
+# This ensures Envoy passes traffic as raw TCP without TLS re-encryption
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-tls-passthrough
+  namespace: ingress2envoygateway
+  labels:
+    app: nginx-tls
+    test: tls-passthrough-18
+spec:
+  selector:
+    app: nginx-tls  # Same pods as nginx-tls
+  ports:
+  - port: 8443
+    targetPort: 8443
+    name: https
+    # NOTE: No appProtocol - this is important for passthrough
+
+---
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: TLSRoute
+metadata:
+  name: nginx-tls-passthrough
+  namespace: ingress2envoygateway
+  labels:
+    app: tls-passthrough-test
+    test: tls-passthrough-18
+spec:
+  parentRefs:
+  - name: external-gateway
+    sectionName: tls-passthrough
+  hostnames:
+  - "nginx-passthrough.${DOMAIN}"
+  rules:
+  - backendRefs:
+    - name: nginx-tls-passthrough  # Use dedicated service without TLS policies
+      port: 8443
+
+# TLS Passthrough:
+# - Client TLS terminates at backend (nginx-tls), NOT at gateway
+# - Gateway sees encrypted traffic, passes it through without decryption
+# - Client sees backend's TLS certificate, not gateway's
+# - No L7 features (CORS, auth, rate limiting) available on passthrough traffic
+#
+# Same Port as HTTPS (443):
+# - Both HTTPS and TLS Passthrough listeners share port 443
+# - Gateway uses SNI (Server Name Indication) to route:
+#   - SNI = nginx-passthrough.* → TLS Passthrough (this route)
+#   - SNI = *.${DOMAIN} (wildcard) → HTTPS Terminate
+# - No port-forward hack needed - direct access via port 443
+#
+# Test 18 Validation:
+# 1. Connect to nginx-passthrough.${DOMAIN}:443
+# 2. Verify TLS certificate is from nginx-tls (not gateway)
+# 3. ssl_client_verify shows connection properties

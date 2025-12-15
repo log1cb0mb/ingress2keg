@@ -1,0 +1,115 @@
+# HTTPRoutes for Backend TLS testing
+#
+# These routes forward traffic to the NGINX TLS backend
+# Each route tests a different TLS approach:
+#   - /api/backend-tls/standard/ → Service (Standard BackendTLSPolicy)
+#   - /api/backend-tls/simple/   → Backend resource (Envoy Gateway simple TLS)
+#   - /api/backend-tls/mtls/     → Backend resource (Envoy Gateway mTLS)
+#
+# NGINX annotations covered:
+#   1. nginx.ingress.kubernetes.io/configuration-snippet: |
+#        proxy_ssl_name "nginx-tls.ingress2envoygateway.svc.cluster.local";
+#      → BackendTLSPolicy.validation.hostname / Backend.tls.sni
+#
+#   2. nginx.ingress.kubernetes.io/proxy-ssl-secret: ingress2envoygateway/nginx-tls-client-cert
+#      → Backend.tls.clientCertificateRef (for mTLS)
+#
+# Reference: https://gateway.envoyproxy.io/docs/tasks/security/backend-mtls/
+
+---
+# =============================================================================
+# Test 17a: Route for Standard BackendTLSPolicy (Simple TLS) - PORTABLE
+# =============================================================================
+# Uses standard Service + BackendTLSPolicy (works with any Gateway API impl)
+
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: backend-tls-standard-route
+  namespace: ingress2envoygateway
+  labels:
+    app: nginx-tls
+    test: backend-tls-17a
+spec:
+  parentRefs:
+  - name: external-gateway
+    namespace: ingress2envoygateway
+    sectionName: https
+  hostnames:
+  - "eg.${DOMAIN}"
+  rules:
+  - matches:
+    - path:
+        type: PathPrefix
+        value: "/api/backend-tls/standard/"
+    backendRefs:
+    # Standard Service reference - BackendTLSPolicy applies automatically
+    - name: nginx-tls
+      port: 8443
+
+---
+# =============================================================================
+# Test 17b: Route for Envoy Gateway Backend Resource (Simple TLS)
+# =============================================================================
+# Uses Envoy Gateway Backend resource with tls.caCertificateRefs only
+# Equivalent to KGateway BackendConfigPolicy with simpleTLS: true
+
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: backend-tls-simple-route
+  namespace: ingress2envoygateway
+  labels:
+    app: nginx-tls
+    test: backend-tls-17b
+spec:
+  parentRefs:
+  - name: external-gateway
+    namespace: ingress2envoygateway
+    sectionName: https
+  hostnames:
+  - "eg.${DOMAIN}"
+  rules:
+  - matches:
+    - path:
+        type: PathPrefix
+        value: "/api/backend-tls/simple/"
+    backendRefs:
+    # Backend resource reference - TLS configured in Backend.spec.tls
+    - group: gateway.envoyproxy.io
+      kind: Backend
+      name: nginx-tls-simple-backend
+
+---
+# =============================================================================
+# Test 17c: Route for Envoy Gateway Backend Resource (mTLS)
+# =============================================================================
+# Uses Envoy Gateway Backend resource with tls.clientCertificateRef
+# Gateway presents client cert to backend for mutual authentication
+# Equivalent to KGateway BackendConfigPolicy without simpleTLS (mTLS mode)
+
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: backend-tls-mtls-route
+  namespace: ingress2envoygateway
+  labels:
+    app: nginx-tls
+    test: backend-tls-17c
+spec:
+  parentRefs:
+  - name: external-gateway
+    namespace: ingress2envoygateway
+    sectionName: https
+  hostnames:
+  - "eg.${DOMAIN}"
+  rules:
+  - matches:
+    - path:
+        type: PathPrefix
+        value: "/api/backend-tls/mtls/"
+    backendRefs:
+    # Backend resource with mTLS - includes clientCertificateRef
+    - group: gateway.envoyproxy.io
+      kind: Backend
+      name: nginx-tls-mtls-backend

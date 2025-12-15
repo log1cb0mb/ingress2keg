@@ -1,0 +1,60 @@
+# HTTPRouteFilter for Regex Path Rewrite
+# Ref: https://gateway.envoyproxy.io/docs/tasks/traffic/http-urlrewrite/
+#
+# NGINX equivalent:
+#   use-regex: 'true'
+#   path: /api/v1/feedback/([^/]*)/implementation/([^/]*)
+#   rewrite-target: /api-feedback-manager/feedback/$1/implementation/$2
+#
+# Envoy Gateway equivalent:
+#   HTTPRouteFilter with urlRewrite.path.replaceRegexMatch
+#
+# Test URL: /api/regex/feedback/ABC123/implementation/DEF456
+# Expected: /api-feedback-manager/feedback/ABC123/implementation/DEF456
+
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: HTTPRouteFilter
+metadata:
+  name: regex-rewrite-filter
+  namespace: ingress2envoygateway
+  labels:
+    app: regex-rewrite-test
+    test-type: regex-capture-validation
+spec:
+  urlRewrite:
+    path:
+      type: ReplaceRegexMatch
+      replaceRegexMatch:
+        # Pattern matches the full path and captures the two IDs
+        pattern: "/api/regex/feedback/([^/]+)/implementation/([^/]+)"
+        # Substitution uses backreferences \1 and \2 (RE2 syntax)
+        # Note: NGINX uses $1, $2 but Envoy uses \1, \2
+        substitution: "/api-feedback-manager/feedback/\\1/implementation/\\2"
+
+---
+# Single capture group test (simpler pattern)
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: HTTPRouteFilter
+metadata:
+  name: single-capture-filter
+  namespace: ingress2envoygateway
+  labels:
+    app: single-capture-test
+spec:
+  urlRewrite:
+    path:
+      type: ReplaceRegexMatch
+      replaceRegexMatch:
+        # Pattern: /api/single-capture/floorplans/{version}/(.*)
+        # Example: /api/single-capture/floorplans/6.4.0/labeltemplates/mytemplate/data
+        # Result:  /api/floorplan/6.4.0/labeltemplates/mytemplate/data
+        pattern: "/api/single-capture/floorplans/([^/]+)/(.*)"
+        substitution: "/api/floorplan/\\1/\\2"
+
+# NGINX → Envoy Gateway Mapping:
+#   use-regex: 'true' → path.type: RegularExpression in HTTPRoute
+#   rewrite-target: $1,$2 → replaceRegexMatch with \1, \2
+#
+# Note: HTTPRouteFilter is referenced from HTTPRoute using ExtensionRef filter
+# See: 04-routing/03-regex-rewrite-test.yaml

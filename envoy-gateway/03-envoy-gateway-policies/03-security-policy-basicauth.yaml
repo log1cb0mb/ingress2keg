@@ -1,0 +1,38 @@
+# SecurityPolicy for Basic Authentication
+# Ref: https://gateway.envoyproxy.io/docs/tasks/security/basic-auth/
+#
+# NGINX equivalent:
+#   nginx.ingress.kubernetes.io/auth-type: basic
+#   nginx.ingress.kubernetes.io/auth-secret: basic-auth
+#   nginx.ingress.kubernetes.io/auth-realm: "Authentication Required" (cosmetic)
+#
+# Test users:
+#   - basicuser:basicpass
+#   - admin:adminpass
+
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: SecurityPolicy
+metadata:
+  name: basic-auth-policy
+  namespace: ingress2envoygateway
+  labels:
+    test: basic-auth
+spec:
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: basic-auth-route
+  
+  basicAuth:
+    users:
+      name: basic-auth-secret
+      # Secret must have .htpasswd key with htpasswd format content
+      # See: 01-apps-and-namespace/05-basic-auth-secret.yaml
+
+# Test 20 Validation:
+# 1. Request without credentials → 401 Unauthorized
+# 2. Request with valid credentials (basicuser:basicpass) → 200 OK
+# 3. Request with invalid credentials → 401 Unauthorized
+#
+# Note: Envoy Gateway uses SecurityPolicy.basicAuth (different from KGateway TrafficPolicy.basicAuth)

@@ -1,0 +1,31 @@
+# BackendConfigPolicy for canary service
+# Session affinity works independently for canary pods
+
+---
+apiVersion: gateway.kgateway.dev/v1alpha1
+kind: BackendConfigPolicy
+metadata:
+  name: session-affinity-policy-canary
+  namespace: ingress2kgateway
+spec:
+  targetRefs:
+  - group: ""
+    kind: Service
+    name: echo-server-canary
+  
+  loadBalancer:
+    ringHash:
+      hashPolicies:
+      - cookie:
+          name: route
+          ttl: 48h
+          path: /
+          httpOnly: false
+          secure: true
+        terminal: true
+
+# Session affinity configuration for canary backend
+# Same cookie name but separate hashing per service
+# This means:
+# - If request goes to stable → sticky to stable pod
+# - If request goes to canary → sticky to canary pod

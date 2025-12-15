@@ -1,0 +1,100 @@
+# OAuth2 Test Route - Azure AD Authentication
+# ============================================================================
+# Test 22: OAuth2 Sign-In (auth-signin)
+#
+# NGINX Equivalent:
+#   nginx.ingress.kubernetes.io/auth-signin: https://$host/oauth2/start?rd=$escaped_request_uri
+#   nginx.ingress.kubernetes.io/auth-url: https://$host/oauth2/auth
+#
+# Envoy Gateway Native OIDC (replaces oauth2-proxy):
+#   - SecurityPolicy.oidc handles the entire OAuth2/OIDC flow
+#   - No external oauth2-proxy deployment needed
+#
+# Flow:
+#   1. User hits /echo on oauth.${DOMAIN}
+#   2. Envoy checks for valid OAuth session (cookie)
+#   3. If no session → 302 redirect to Azure AD login
+#   4. User authenticates with Azure AD
+#   5. Azure AD redirects to /oauth2/callback with auth code
+#   6. Envoy exchanges code for token, creates session cookie
+#   7. User redirected to original URL (/echo)
+#   8. Request proceeds to backend with access token in Authorization header
+# ============================================================================
+
+---
+# HTTPRoute for OAuth2-protected paths
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: oauth2-test-route
+  namespace: ingress2envoygateway
+  labels:
+    app: oauth2-test
+    test: "22"
+spec:
+  parentRefs:
+  - name: external-gateway
+    namespace: ingress2envoygateway
+    sectionName: https  # Target ONLY the HTTPS listener
+  
+  hostnames:
+  - "oauth.${DOMAIN}"
+  
+  rules:
+  # OAuth2 callback - intercepted by Envoy for token exchange
+  - matches:
+    - path:
+        type: PathPrefix
+        value: "/oauth2"
+    backendRefs:
+    - name: echo-server  # Won't reach backend - intercepted by OIDC filter
+      port: 8080
+  
+  # Root redirect (app-root equivalent)
+  - matches:
+    - path:
+        type: Exact
+        value: "/"
+    filters:
+    - type: RequestRedirect
+      requestRedirect:
+        path:
+          type: ReplaceFullPath
+          replaceFullPath: "/echo"
+        statusCode: 302
+  
+  # Protected path - requires OAuth2 authentication
+  - matches:
+    - path:
+        type: PathPrefix
+        value: "/echo"
+    backendRefs:
+    - name: echo-server
+      port: 8080
+  
+  # Logout - clears OAuth session cookie
+  - matches:
+    - path:
+        type: Exact
+        value: "/logout"
+    backendRefs:
+    - name: echo-server
+      port: 8080
+
+# ============================================================================
+# OIDC Client Secret
+# ============================================================================
+# Create this secret with your Azure AD client secret:
+#
+#   kubectl create secret generic oidc-client-secret \
+#     --from-literal=client-secret='YOUR_AZURE_CLIENT_SECRET' \
+#     -n ingress2envoygateway
+#
+# Or for testing, you can use the existing oauth2-proxy secret if available:
+#
+#   kubectl get secret oauth2-proxy -n oauth2-proxy -o yaml | \
+#     sed 's/namespace: oauth2-proxy/namespace: ingress2envoygateway/' | \
+#     sed 's/name: oauth2-proxy/name: oidc-client-secret/' | \
+#     kubectl apply -f -
+#
+# ============================================================================

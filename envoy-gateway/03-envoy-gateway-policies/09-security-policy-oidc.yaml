@@ -1,0 +1,138 @@
+# SecurityPolicy for OAuth2/OIDC Authentication
+# ============================================================================
+# Test 22: OAuth2 Sign-In (auth-signin)
+#
+# NGINX Equivalent:
+#   nginx.ingress.kubernetes.io/auth-signin: https://$host/oauth2/start?rd=$escaped_request_uri
+#   nginx.ingress.kubernetes.io/auth-url: https://$host/oauth2/auth
+#
+# Envoy Gateway Native OIDC (replaces oauth2-proxy):
+#   - No oauth2-proxy deployment needed
+#   - Envoy handles OAuth2/OIDC flow directly
+#   - Auto-redirects unauthenticated users to OIDC provider
+#   - Forwards access token to backend
+#
+# Reference: https://gateway.envoyproxy.io/docs/tasks/security/oidc/
+# ============================================================================
+# 
+# Prerequisites:
+#   1. Configure OIDC provider in config.env:
+#      OIDC_ISSUER_URL, OIDC_CLIENT_ID
+#   2. Create secret 'oidc-client-secret' with key 'client-secret':
+#      kubectl create secret generic oidc-client-secret \
+#        --from-literal=client-secret=<YOUR_CLIENT_SECRET> \
+#        -n ingress2envoygateway
+#   3. Register redirect URI with your OIDC provider:
+#      https://oauth.${DOMAIN}/oauth2/callback
+#
+# Supported Providers:
+#   - Azure AD: issuer = https://login.microsoftonline.com/<tenant-id>/v2.0
+#   - Google: issuer = https://accounts.google.com
+#   - Okta: issuer = https://<org>.okta.com
+#   - Keycloak: issuer = https://<host>/realms/<realm>
+#   - Auth0: issuer = https://<tenant>.<region>.auth0.com
+#
+# ============================================================================
+
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: SecurityPolicy
+metadata:
+  name: oidc-policy
+  namespace: ingress2envoygateway
+  labels:
+    app: oauth2
+    test: "22"
+spec:
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: oauth2-test-route
+  
+  oidc:
+    # OIDC Client ID from your provider's App Registration
+    # Configured via OIDC_CLIENT_ID in config.env
+    clientID: "${OIDC_CLIENT_ID}"
+    
+    # Client secret reference
+    # Secret must have key 'client-secret'
+    clientSecret:
+      name: oidc-client-secret
+      # namespace: ingress2envoygateway  # Same namespace, so not needed
+    
+    # OIDC Provider configuration
+    provider:
+      # OIDC Discovery URL - Envoy auto-discovers endpoints from .well-known/openid-configuration
+      # Configured via OIDC_ISSUER_URL in config.env
+      # Examples:
+      #   Azure AD: https://login.microsoftonline.com/<tenant-id>/v2.0
+      #   Google: https://accounts.google.com
+      #   Okta: https://<org>.okta.com
+      issuer: "${OIDC_ISSUER_URL}"
+      
+      # Endpoints are auto-discovered from issuer, but can be overridden:
+      # authorizationEndpoint: "${OIDC_ISSUER_URL}/authorize"
+      # tokenEndpoint: "${OIDC_ISSUER_URL}/token"
+    
+    # Redirect URI - where provider redirects after login
+    # Must match registered redirect URI in your OIDC provider
+    redirectURL: "https://oauth.${DOMAIN}/oauth2/callback"
+    
+    # Logout path - clears session when user hits this path
+    logoutPath: "/logout"
+    
+    # OAuth2 scopes - openid required for OIDC
+    scopes:
+    - "openid"
+    - "profile"
+    - "email"
+    
+    # Forward access token to backend in Authorization header
+    forwardAccessToken: true
+    
+    # Cookie settings for session
+    cookieNames:
+      accessToken: "eg_access_token"
+      idToken: "eg_id_token"
+    
+    # Optional: Cookie domain and SameSite settings
+    # cookieDomain: ".${DOMAIN}"
+    cookieConfig:
+      sameSite: Lax
+
+# ============================================================================
+# NGINX → Envoy Gateway Mapping
+# ============================================================================
+#
+# | NGINX | Envoy Gateway SecurityPolicy.oidc |
+# |-------|-----------------------------------|
+# | auth-signin + auth-url (OAuth2) | Automatic redirect to provider.issuer |
+# | oauth2-proxy deployment | NOT NEEDED - Envoy handles natively |
+# | cookie handling | Built-in with cookieNames config |
+# | token forwarding | forwardAccessToken: true |
+#
+# ============================================================================
+# Flow:
+# ============================================================================
+#   1. User hits /echo on oauth.${DOMAIN}
+#   2. Envoy checks for valid OAuth session (cookie)
+#   3. If no session → 302 redirect to Azure AD login
+#   4. User authenticates with Azure AD
+#   5. Azure AD redirects to /oauth2/callback with auth code
+#   6. Envoy exchanges code for token, creates session cookie
+#   7. User redirected to original URL (/echo)
+#   8. Request proceeds to backend with access token in Authorization header
+#
+# ============================================================================
+# KGateway vs Envoy Gateway Comparison
+# ============================================================================
+#
+# | Feature | KGateway | Envoy Gateway |
+# |---------|----------|---------------|
+# | CRD | GatewayExtension.oauth2 | SecurityPolicy.oidc |
+# | Backend for IDP | Backend resource (Static) | Built-in (uses issuer URL) |
+# | BackendTLSPolicy for IDP | Required | Not needed (auto TLS) |
+# | CSRF Protection | TrafficPolicy.csrf | Built-in (state parameter) |
+# | Token forwarding | forwardAccessToken | forwardAccessToken |
+#
+# ============================================================================

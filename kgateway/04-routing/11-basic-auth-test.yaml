@@ -1,0 +1,62 @@
+# Basic Auth Test - Test 20
+# NGINX equivalent annotations:
+#   nginx.ingress.kubernetes.io/auth-type: basic
+#   nginx.ingress.kubernetes.io/auth-secret: basic-auth
+#   nginx.ingress.kubernetes.io/auth-realm: "Authentication Required"
+#
+# KGateway mapping:
+#   auth-type: basic → TrafficPolicy.basicAuth
+#   auth-secret → TrafficPolicy.basicAuth.secretRef.name
+#   auth-realm → NOT SUPPORTED (KGateway limitation)
+#
+# Note: This is a KGateway-specific feature, not part of Gateway API spec
+
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: basic-auth-test-route
+  namespace: ingress2kgateway
+  labels:
+    app: basic-auth-test
+    test: basic-auth-20
+spec:
+  parentRefs:
+  - name: external-gateway
+    namespace: ingress2kgateway
+    sectionName: https
+  hostnames:
+  - "i2g.${DOMAIN}"
+  rules:
+  # Basic auth protected endpoint
+  - matches:
+    - path:
+        type: PathPrefix
+        value: "/api/basic-auth/protected"
+    backendRefs:
+    - name: echo-server
+      port: 8080
+
+---
+apiVersion: gateway.kgateway.dev/v1alpha1
+kind: TrafficPolicy
+metadata:
+  name: basic-auth-policy
+  namespace: ingress2kgateway
+  labels:
+    app: basic-auth-test
+    test: basic-auth-20
+spec:
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: basic-auth-test-route
+  
+  # Basic Authentication
+  # Equivalent to NGINX:
+  #   auth-type: basic
+  #   auth-secret: basic-auth-secret
+  basicAuth:
+    secretRef:
+      name: basic-auth-secret
+      # key: .htpasswd  # default

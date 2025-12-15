@@ -1,0 +1,200 @@
+# # ============================================================================
+# # SUPPLEMENTARY REFERENCE: Gateway-Level OAuth2 Enforcement
+# # ============================================================================
+# #
+# # This file demonstrates an ALTERNATIVE approach to OAuth2 protection where
+# # the TrafficPolicy is attached to the Gateway instead of individual HTTPRoutes.
+# #
+# # WHY THIS FILE EXISTS:
+# #   - Primary test (12-oauth2-test.yaml) attaches TrafficPolicy → HTTPRoute
+# #   - This supplementary reference shows TrafficPolicy → Gateway pattern
+# #   - Useful when you want OAuth2 enforced globally on ALL routes for a Gateway
+# #
+# # KEY CONSTRAINT:
+# #   TrafficPolicy can ONLY target resources in the SAME NAMESPACE:
+# #     - targetRefs.kind: HTTPRoute (same namespace)
+# #     - targetRefs.kind: Gateway (same namespace)
+# #
+# # WHEN TO USE GATEWAY-LEVEL OAUTH2:
+# #   ✅ All routes on the Gateway require the same OAuth2 protection
+# #   ✅ Simpler configuration - single policy protects everything
+# #   ✅ Dedicated Gateway per application/team with uniform auth requirements
+# #
+# # WHEN TO USE HTTPROUTE-LEVEL OAUTH2 (primary approach):
+# #   ✅ Selective protection - only specific routes need OAuth2
+# #   ✅ Shared Gateway across multiple teams/applications
+# #   ✅ Different OAuth2 configs for different routes
+# #
+# # NGINX Equivalent (for reference):
+# #   nginx.ingress.kubernetes.io/auth-signin: https://$host/oauth2/start?...
+# #   nginx.ingress.kubernetes.io/auth-url: https://$host/oauth2/auth
+# #
+# # OAuth2 Flow:
+# #   1. User hits /echo → KGateway checks for OAuth session
+# #   2. No session → 302 redirect to Azure AD login
+# #   3. User authenticates → Azure AD returns code to /oauth2/callback
+# #   4. KGateway exchanges code for token, creates session cookie
+# #   5. User redirected to original URL with access token forwarded to backend
+# # ============================================================================
+# # ============================================================================
+# # DEDICATED GATEWAY - For Gateway-Level TrafficPolicy
+# # ============================================================================
+# # Alternative: Create a dedicated Gateway for OAuth2-protected routes.
+# # This allows a single TrafficPolicy to protect all routes on the Gateway.
+# # ============================================================================
+# apiVersion: gateway.kgateway.dev/v1alpha1
+# kind: GatewayParameters
+# metadata:
+#   name: oauth-gateway-parameters
+#   namespace: ingress2kgateway
+# spec:
+#   kube:
+#     service:
+#       # Preserve client source IP (not NAT'd by Azure LB)
+#       externalTrafficPolicy: Local
+# ---
+# apiVersion: gateway.networking.k8s.io/v1
+# kind: Gateway
+# metadata:
+#   name: oauth-gateway
+#   namespace: ingress2kgateway
+#   annotations:
+#     cert-manager.io/cluster-issuer: ${CLUSTER_ISSUER}
+# spec:
+#   gatewayClassName: kgateway
+#   infrastructure:
+#     annotations:
+#       service.beta.kubernetes.io/azure-load-balancer-internal: "true"
+#     parametersRef:
+#       group: gateway.kgateway.dev
+#       kind: GatewayParameters
+#       name: oauth-gateway-parameters
+#   listeners:
+#   - name: https
+#     protocol: HTTPS
+#     port: 443
+#     hostname: "oauth.${DOMAIN}"
+#     tls:
+#       mode: Terminate
+#       certificateRefs:
+#       - name: gateway-tls-cert
+#         kind: Secret
+#     allowedRoutes:
+#       namespaces:
+#         from: All
+
+# ---
+# # ============================================================================
+# # HTTPRoute - Routes attached to the dedicated oauth-gateway
+# # ============================================================================
+# # Note: The OAuth2 protection comes from the TrafficPolicy targeting the
+# # Gateway (below), not this HTTPRoute. All routes on the Gateway are protected.
+# # ============================================================================
+# apiVersion: gateway.networking.k8s.io/v1
+# kind: HTTPRoute
+# metadata:
+#   name: oauth2-gw-level-route
+#   namespace: ingress2kgateway
+#   labels:
+#     app: oauth2-gw-level
+#     reference: supplementary
+# spec:
+#   parentRefs:
+#   - name: oauth-gateway
+#     namespace: ingress2kgateway
+#     sectionName: https
+#   hostnames:
+#   - "oauth.${DOMAIN}"
+#   rules:
+#   # OAuth2 callback - intercepted by OAuth2 filter for token exchange
+#   - matches:
+#     - path:
+#         type: PathPrefix
+#         value: "/oauth2"
+#     backendRefs:
+#     - name: echo-server
+#       port: 8080
+  
+#   # Root redirect (app-root equivalent)
+#   # Redirects / to the main application path
+#   - matches:
+#     - path:
+#         type: Exact
+#         value: "/"
+#     filters:
+#     - type: RequestRedirect
+#       requestRedirect:
+#         path:
+#           type: ReplaceFullPath
+#           replaceFullPath: "/echo"
+#         statusCode: 302
+  
+#   # Protected application paths - OAuth2 enforced via Gateway-level policy
+#   - matches:
+#     - path:
+#         type: PathPrefix
+#         value: "/echo"
+#     backendRefs:
+#     - name: echo-server
+#       port: 8080
+  
+#   # Logout - clears OAuth session
+#   - matches:
+#     - path:
+#         type: Exact
+#         value: "/logout"
+#     backendRefs:
+#     - name: echo-server
+#       port: 8080
+
+# ---
+# # ============================================================================
+# # TrafficPolicy - Targets GATEWAY (not HTTPRoute)
+# # ============================================================================
+# # KEY DIFFERENCE FROM PRIMARY TEST (12-oauth2-test.yaml):
+# #   - Primary:      TrafficPolicy → HTTPRoute (selective protection)
+# #   - This example: TrafficPolicy → Gateway (global protection)
+# #
+# # RESULT:
+# #   ALL routes attached to the Gateway inherit OAuth2 protection
+# #   automatically without needing individual TrafficPolicy per HTTPRoute.
+# # ============================================================================
+# apiVersion: gateway.kgateway.dev/v1alpha1
+# kind: TrafficPolicy
+# metadata:
+#   name: oauth2-gw-level-policy
+#   namespace: ingress2kgateway
+#   labels:
+#     app: oauth2-gw-level
+#     reference: supplementary
+# spec:
+#   targetRefs:
+#   # ========================================================================
+#   # TARGET: Gateway (protects ALL routes on this Gateway)
+#   # ========================================================================
+#   - group: gateway.networking.k8s.io
+#     kind: Gateway
+#     name: oauth-gateway   # Must be in same namespace (ingress2kgateway)
+  
+#   # ========================================================================
+#   # Alternative: Target HTTPRoute (selective protection)
+#   # ========================================================================
+#   # Uncomment to target specific HTTPRoute instead:
+#   # - group: gateway.networking.k8s.io
+#   #   kind: HTTPRoute
+#   #   name: oauth2-gw-level-route
+
+#   # OAuth2 configuration - protects all routes on the Gateway
+#   oauth2:
+#     extensionRef:
+#       name: oauth2-oidc
+  
+#   # ========================================================================
+#   # CSRF Protection (recommended for OAuth2)
+#   # ========================================================================
+#   # OAuth2 uses cookies for session management, which are vulnerable to CSRF.
+#   # This validates Origin header matches destination or allowed origins.
+#   csrf:
+#     percentageEnabled: 100
+#     # additionalOrigins:
+#     # - suffix: ".${DOMAIN}"

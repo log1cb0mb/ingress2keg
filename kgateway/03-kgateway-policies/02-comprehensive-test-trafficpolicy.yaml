@@ -1,0 +1,223 @@
+# TrafficPolicy for comprehensive feature testing
+# Implements all NGINX annotations from full-sample.yaml
+# Merged from: location-space + floorplan-tasks + planogramming-settings
+# Features: External Auth (HTTP!), CORS, Rate Limiting, Timeouts, Buffer, Path Transformation, IP Whitelisting, Retry
+
+---
+apiVersion: gateway.kgateway.dev/v1alpha1
+kind: TrafficPolicy
+metadata:
+  name: comprehensive-test-policy
+  namespace: ingress2kgateway
+spec:
+  # Attach to HTTPRoute
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: comprehensive-test-route
+  
+  # 1. External Authentication (HTTP)
+  #
+  # NGINX pattern:
+  #   nginx.ingress.kubernetes.io/auth-url: https://host/api/accounts/iip/tokenExchange
+  #   nginx.ingress.kubernetes.io/auth-response-headers: authorization
+  #
+  # KGateway HTTP auth mapping:
+  #   auth-url → httpService.backendRef + pathPrefix
+  #   auth-response-headers → authorizationResponse.headersToBackend
+  #
+  # Testing with Envoy HTTP auth service:
+  #   → Uses: Authorization: Bearer token1
+  #   → Returns: x-current-user header (validates auth-response-headers!)
+  extAuth:
+    extensionRef:
+      name: ext-auth-http
+      namespace: ingress2kgateway
+  
+  # 2. IP Whitelisting / Source Range (RBAC)
+  # NGINX: nginx.ingress.kubernetes.io/whitelist-source-range: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+  # KGateway: RBAC with CEL expressions using source.address.startsWith()
+  # Docs: https://kgateway.dev/docs/latest/agentgateway/rbac/
+  #
+  # CEL Syntax Notes:
+  #   - source.address = "IP:PORT" string (e.g., "10.235.241.196:54321")
+  #   - Use startsWith() for CIDR-like matching:
+  #     - /8  → startsWith("10.")
+  #     - /16 → startsWith("172.16.") through startsWith("172.31.")
+  #     - /24 → startsWith("192.168.1.")
+  #     - /32 → startsWith("192.168.1.100:")  (include colon for exact IP)
+  #   - Multiple expressions = OR logic (any match allows)
+  #   - action: Allow = whitelist mode (deny all except matches)
+  #   - action: Deny  = blacklist mode (allow all except matches)
+  #
+  # ⚠️ IMPORTANT: Requires externalTrafficPolicy: Local on Gateway Service
+  #    to preserve original client IP (otherwise Azure LB SNATs to 10.x.x.x)
+  #    See: GatewayParameters in 02-gateway/00-gateway.yaml
+  #
+  rbac:
+    action: Allow
+    policy:
+      matchExpressions:
+        # RFC 1918 Private IP Ranges - for reusable testing
+        # 10.0.0.0/8 - Class A private
+        - "source.address.startsWith(\"10.\")"
+        # 172.16.0.0/12 - Class B private (172.16.x.x - 172.31.x.x)
+        - "source.address.startsWith(\"172.16.\")"
+        - "source.address.startsWith(\"172.17.\")"
+        - "source.address.startsWith(\"172.18.\")"
+        - "source.address.startsWith(\"172.19.\")"
+        - "source.address.startsWith(\"172.20.\")"
+        - "source.address.startsWith(\"172.21.\")"
+        - "source.address.startsWith(\"172.22.\")"
+        - "source.address.startsWith(\"172.23.\")"
+        - "source.address.startsWith(\"172.24.\")"
+        - "source.address.startsWith(\"172.25.\")"
+        - "source.address.startsWith(\"172.26.\")"
+        - "source.address.startsWith(\"172.27.\")"
+        - "source.address.startsWith(\"172.28.\")"
+        - "source.address.startsWith(\"172.29.\")"
+        - "source.address.startsWith(\"172.30.\")"
+        - "source.address.startsWith(\"172.31.\")"
+        # 192.168.0.0/16 - Class C private
+        - "source.address.startsWith(\"192.168.\")"
+        # Localhost (for local testing scenarios)
+        - "source.address.startsWith(\"127.\")"
+  
+  # 3. CORS Configuration
+  # NGINX annotations covered:
+  #   - enable-cors: "true"
+  #   - cors-allow-origin / cors-allow-origins
+  #   - cors-allow-methods
+  #   - cors-allow-headers
+  #   - cors-allow-credentials
+  #   - cors-expose-headers
+  #   - cors-max-age (via maxAge)
+  cors:
+    allowOrigins:
+    - "https://*.${DOMAIN}"  # Wildcard with scheme
+    - "http://localhost:4200"                      # Local development
+    - "http://localhost:5004"                      # Local development
+    allowMethods:
+    - GET
+    - POST
+    - PUT
+    - DELETE
+    - PATCH
+    - OPTIONS
+    allowHeaders:
+    - keep-alive
+    - user-agent
+    - x-requested-with
+    - if-modified-since
+    - cache-control
+    - content-type
+    - token
+    - account
+    - api-version
+    - x-trace-id
+    # exposeHeaders: Headers exposed to client-side scripts (Access-Control-Expose-Headers)
+    # NGINX: cors-expose-headers: "Content-Disposition"
+    # Note: CORS-safelisted headers (Cache-Control, Content-Language, Content-Length, 
+    #       Content-Type, Expires, Last-Modified, Pragma) are exposed by default
+    exposeHeaders:
+    - Content-Disposition              # For file downloads (from Store production)
+    - X-Request-Id                     # For request tracing
+    - x-envoy-upstream-service-time    # KGateway (Envoy proxy) adds this - verifiable in tests
+    allowCredentials: true
+    maxAge: 86400  # 24 hours in seconds
+  
+  # 4. Rate Limiting
+  # NGINX: limit-rps: 10, limit-burst-multiplier: 1 (default is 5)
+  # NGINX: limit-rpm: 600 (requests per minute) - same mechanism, change fillInterval to 1m
+  # Mapping:
+  #   - limit-rps → tokensPerFill (requests per fill interval)
+  #   - limit-burst-multiplier → maxTokens (burst = limit-rps * multiplier)
+  #   - fillInterval: 1s for RPS, 1m for RPM
+  rateLimit:
+    local:
+      tokenBucket:
+        tokensPerFill: 10   # limit-rps value
+        maxTokens: 10       # limit-burst-multiplier: 1 → burst = 10 * 1 = 10
+        fillInterval: 1s    # 1s = RPS, 1m = RPM
+  
+  # 5. Buffer / Body Size
+  # NGINX: proxy-body-size: 100m
+  buffer:
+    maxRequestSize: 100Mi
+  
+  # 6. Timeouts
+  # NGINX: proxy-read-timeout: 300, proxy-send-timeout: 300
+  timeouts:
+    request: 300s
+    streamIdle: 300s
+  
+  # 7. Response Compression (Gzip)
+  # NGINX configuration-snippet:
+  #   gzip on;
+  #   gzip_types application/json;
+  #
+  # KGateway automatically compresses these content-types:
+  #   - application/javascript
+  #   - application/json (✅ matches NGINX config)
+  #   - application/xhtml+xml
+  #   - image/svg+xml
+  #   - text/css, text/html, text/plain, text/xml
+  compression:
+    responseCompression: {}
+  
+  # 8. Header Modification (Request)
+  # NGINX configuration-snippet:
+  #   more_set_input_headers 'Accept: text/plain';
+  #
+  # KGateway headerModifiers options:
+  #   - set: Overwrites header value (use for more_set_input_headers)
+  #   - add: Appends to existing values
+  #   - remove: Removes headers
+  headerModifiers:
+    request:
+      set:
+        - name: Accept
+          value: "text/plain"
+    response:
+      add:
+        - name: X-Cluster-Name
+          value: "kgateway-test"
+  
+  # 9. Path Transformation / Rewrite
+  # NGINX: rewrite-target: /api/locationspacereader/6.4.1/locationspace/$1
+  # Path: /api/locationspace/6.4.1/(.*)
+  #
+  # Using standard Gateway API URLRewrite filter in HTTPRoute (not TrafficPolicy)
+  # Note: URLRewrite uses ReplacePrefixMatch (simple prefix replacement)
+  # For regex capture groups, use TrafficPolicy.urlRewrite.pathRegex
+  #
+  # See: 03-regex-rewrite-test.yaml and 04-single-capture-test.yaml for regex examples
+  
+  # 10. Retry Policy (Test 21)
+  # NGINX: nginx.ingress.kubernetes.io/proxy-next-upstream-tries: '3'
+  # KGateway: TrafficPolicy.retry
+  # Note: Gateway API has experimental support (GEP-1731), KGateway uses TrafficPolicy
+  #
+  # Ingress dump context: Only proxy-next-upstream-tries is used (no proxy-next-upstream)
+  # Using KGateway docs example values for full coverage
+  retry:
+    # Number of retry attempts (equivalent to proxy-next-upstream-tries: '3')
+    attempts: 3
+    # Exponential backoff base interval between retries
+    backoffBaseInterval: 1s
+    # Conditions to trigger retry
+    retryOn:
+    - "5xx"           # Retry on 5xx errors
+    - "unavailable"   # Retry when upstream unavailable
+
+# Features Summary (10 total):
+# 1. External Auth (HTTP) - GatewayExtension.extAuth.httpService
+# 2. IP Whitelisting (RBAC) - TrafficPolicy.rbac with CEL expressions
+# 3. CORS - TrafficPolicy.cors with wildcard origins
+# 4. Rate Limiting - TrafficPolicy.rateLimit.local.tokenBucket
+# 5. Buffer/Body Size - TrafficPolicy.buffer.maxRequestSize
+# 6. Timeouts - TrafficPolicy.timeouts.request + streamIdle
+# 7. Response Compression - TrafficPolicy.compression.responseCompression
+# 8. Header Modification - TrafficPolicy.headerModifiers.request.set + response.add
+# 9. Path Rewrite - HTTPRoute URLRewrite (prefix) or TrafficPolicy.urlRewrite.pathRegex (regex)
+# 10. Retry Policy - TrafficPolicy.retry.attempts (proxy-next-upstream-tries)

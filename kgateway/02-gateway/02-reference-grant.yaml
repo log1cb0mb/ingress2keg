@@ -1,0 +1,23 @@
+# ReferenceGrant - Example for cross-namespace references
+# ============================================================================
+# Not used in this setup - all resources are in ingress2kgateway namespace.
+# Uncomment if you need to reference resources across namespaces.
+# ============================================================================
+
+# ---
+# apiVersion: gateway.networking.k8s.io/v1beta1
+# kind: ReferenceGrant
+# metadata:
+#   name: allow-kgateway-to-apps
+#   namespace: ingress2kgateway
+# spec:
+#   from:
+#   - group: gateway.kgateway.dev
+#     kind: GatewayExtension
+#     namespace: ingress2kgateway
+#   to:
+#   - group: ""
+#     kind: Service
+#
+# # This allows the GatewayExtension (ext-auth) in kgateway-system
+# # to reference the Service (ext-authz) in ingress2kgateway namespace

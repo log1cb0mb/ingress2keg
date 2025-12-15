@@ -1,0 +1,88 @@
+# Flaky Backend - Always returns 503 for retry testing
+# Used to verify BackendTrafficPolicy.retry behavior
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: flaky-nginx-config
+  namespace: ingress2envoygateway
+data:
+  nginx.conf: |
+    events {
+      worker_connections 1024;
+    }
+    http {
+      server {
+        listen 8080;
+        
+        # Always return 503 Service Unavailable
+        location / {
+          return 503 '{"error": "Service Unavailable", "message": "Flaky backend for retry testing"}';
+          add_header Content-Type application/json;
+        }
+        
+        # Health endpoint (returns 200 so pod stays "healthy")
+        location /healthz {
+          return 200 'ok';
+          add_header Content-Type text/plain;
+        }
+      }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flaky-backend
+  namespace: ingress2envoygateway
+  labels:
+    app: flaky-backend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: flaky-backend
+  template:
+    metadata:
+      labels:
+        app: flaky-backend
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:alpine
+        ports:
+        - containerPort: 8080
+        volumeMounts:
+        - name: nginx-config
+          mountPath: /etc/nginx/nginx.conf
+          subPath: nginx.conf
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+      volumes:
+      - name: nginx-config
+        configMap:
+          name: flaky-nginx-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: flaky-backend
+  namespace: ingress2envoygateway
+  labels:
+    app: flaky-backend
+spec:
+  selector:
+    app: flaky-backend
+  ports:
+  - port: 8080
+    targetPort: 8080
+    name: http

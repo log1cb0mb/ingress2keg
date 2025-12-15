@@ -1,0 +1,23 @@
+# ReferenceGrant - Example for cross-namespace references
+# ============================================================================
+# Not used in this setup - all resources are in ingress2envoygateway namespace.
+# Uncomment if you need to reference resources across namespaces.
+# ============================================================================
+
+# ---
+# apiVersion: gateway.networking.k8s.io/v1beta1
+# kind: ReferenceGrant
+# metadata:
+#   name: allow-envoygateway-to-apps
+#   namespace: ingress2envoygateway
+# spec:
+#   from:
+#   - group: gateway.envoyproxy.io
+#     kind: SecurityPolicy
+#     namespace: ingress2envoygateway
+#   to:
+#   - group: ""
+#     kind: Service
+#
+# # This allows the SecurityPolicy (ext-auth) to reference 
+# # Services in other namespaces

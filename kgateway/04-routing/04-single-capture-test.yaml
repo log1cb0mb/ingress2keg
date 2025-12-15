@@ -1,0 +1,72 @@
+# HTTPRoute + TrafficPolicy for testing single-capture regex path rewrite
+# This tests a common production pattern: /path(/.*|$) -> /newpath$1
+#
+# Production example being tested:
+#   NGINX path: /api/floorplans/6.4.0/labeltemplates(/.*|$)
+#   NGINX rewrite-target: /api/floorplan/6.4.0/labeltemplates$1
+#
+# Test URL 1: /api/single-capture/floorplans/6.4.0/labeltemplates/mytemplate/data
+# Expected rewrite 1: /api/floorplan/6.4.0/labeltemplates/mytemplate/data
+#
+# Test URL 2: /api/single-capture/floorplans/6.4.0/labeltemplates
+# Expected rewrite 2: /api/floorplan/6.4.0/labeltemplates
+
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: single-capture-test-route
+  namespace: ingress2kgateway
+  labels:
+    app: single-capture-test
+    test-type: regex-single-capture-validation
+spec:
+  parentRefs:
+  - name: external-gateway
+    namespace: ingress2kgateway
+    sectionName: https
+  
+  hostnames:
+  - "i2g.${DOMAIN}"
+  
+  rules:
+  # Route for single-capture regex rewrite testing
+  - matches:
+    - path:
+        type: RegularExpression
+        # Matches: /api/single-capture/floorplans/6.4.0/labeltemplates(/.*|$)
+        # Capture group 1: the suffix (e.g., /mytemplate/data or empty)
+        value: "/api/single-capture/floorplans/6.4.0/labeltemplates(/.*|$)"
+    
+    backendRefs:
+    - name: echo-server
+      port: 8080
+      weight: 100
+
+---
+apiVersion: gateway.kgateway.dev/v1alpha1
+kind: TrafficPolicy
+metadata:
+  name: single-capture-test-policy
+  namespace: ingress2kgateway
+  labels:
+    app: single-capture-test
+spec:
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: single-capture-test-route
+  
+  # Regex path rewrite with single capture group
+  urlRewrite:
+    pathRegex:
+      # Pattern matches the full path and captures the suffix
+      pattern: "/api/single-capture/floorplans/6.4.0/labeltemplates(/.*|$)"
+      # Substitution uses backreference \1 for the captured suffix
+      substitution: "/api/floorplan/6.4.0/labeltemplates\\1"
+  
+  # Include external auth for this route
+  extAuth:
+    extensionRef:
+      name: ext-auth-http
+      namespace: ingress2kgateway

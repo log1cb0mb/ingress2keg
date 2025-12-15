@@ -1,0 +1,64 @@
+# HTTPRoute for testing regex path rewrite with capture groups
+# Uses HTTPRouteFilter.urlRewrite.replaceRegexMatch via ExtensionRef
+#
+# NGINX equivalent:
+#   use-regex: 'true'
+#   path: /api/v1/feedback/([^/]*)/implementation/([^/]*)
+#   rewrite-target: /api-feedback-manager/feedback/$1/implementation/$2
+#
+# Test URL: /api/regex/feedback/ABC123/implementation/DEF456
+# Expected: /api-feedback-manager/feedback/ABC123/implementation/DEF456
+
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: regex-rewrite-test-route
+  namespace: ingress2envoygateway
+  labels:
+    app: regex-rewrite-test
+    test-type: regex-capture-validation
+spec:
+  parentRefs:
+  - name: external-gateway
+    namespace: ingress2envoygateway
+    sectionName: https
+  
+  hostnames:
+  - "eg.${DOMAIN}"
+  
+  rules:
+  # Multi-capture group rewrite test
+  - matches:
+    - path:
+        type: RegularExpression
+        # Matches: /api/regex/feedback/{id1}/implementation/{id2}
+        value: "/api/regex/feedback/([^/]+)/implementation/([^/]+)"
+    
+    filters:
+    - type: ExtensionRef
+      extensionRef:
+        group: gateway.envoyproxy.io
+        kind: HTTPRouteFilter
+        name: regex-rewrite-filter
+    
+    backendRefs:
+    - name: echo-server
+      port: 8080
+
+  # Single-capture group rewrite test
+  - matches:
+    - path:
+        type: RegularExpression
+        value: "/api/single-capture/floorplans/([^/]+)/(.*)"
+    
+    filters:
+    - type: ExtensionRef
+      extensionRef:
+        group: gateway.envoyproxy.io
+        kind: HTTPRouteFilter
+        name: single-capture-filter
+    
+    backendRefs:
+    - name: echo-server
+      port: 8080

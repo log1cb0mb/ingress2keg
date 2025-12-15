@@ -1,0 +1,37 @@
+# # ClientTrafficPolicy for Gateway-level configuration
+# # Configures client/listener behavior including:
+# # - Client IP detection (required for IP whitelisting)
+# # - TLS settings
+# # - Connection limits
+# # - Header manipulation at listener level
+# #
+# # Reference: https://gateway.envoyproxy.io/docs/api/extension_types/#clienttrafficpolicy
+
+# ---
+# apiVersion: gateway.envoyproxy.io/v1alpha1
+# kind: ClientTrafficPolicy
+# metadata:
+#   name: preserve-client-ip
+#   namespace: ingress2envoygateway
+# spec:
+#   targetRefs:
+#   - group: gateway.networking.k8s.io
+#     kind: Gateway
+#     name: external-gateway
+  
+#   # Client IP Detection
+#   # Required for IP-based authorization (whitelist-source-range equivalent)
+#   # When behind Azure Load Balancer, we need to trust X-Forwarded-For
+#   clientIPDetection:
+#     xForwardedFor:
+#       # Trust 1 hop (Azure internal LB adds X-Forwarded-For)
+#       numTrustedHops: 1
+
+# # NGINX Equivalent Context:
+# # - This is similar to externalTrafficPolicy: Local in KGateway
+# # - Ensures SecurityPolicy.authorization can see real client IP
+# # - numTrustedHops tells Envoy how many proxies are in front
+# #
+# # Alternative: If using PROXY protocol:
+# #   proxyProtocol:
+# #     optional: false

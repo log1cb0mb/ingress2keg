@@ -1,0 +1,135 @@
+# HTTPRoute for comprehensive feature testing
+# Converted from: full-sample.yaml (merged features from 3 services)
+# Represents: location-space + floorplan-tasks + planogramming-settings
+# Tests: External auth, CORS, timeouts, body-size, rate limiting, regex rewrite
+
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: comprehensive-test-route
+  namespace: ingress2kgateway
+  labels:
+    app: comprehensive-test
+    test-type: full-feature-validation
+spec:
+  parentRefs:
+  - name: external-gateway
+    namespace: ingress2kgateway
+    sectionName: https
+  
+  hostnames:
+  - "i2g.${DOMAIN}"
+  
+  rules:
+  # Comprehensive test route - validates Gateway API + KGateway extension features
+  #
+  # FEATURES TESTED:
+  # 1. Simple prefix rewrites (ReplacePrefixMatch)
+  # 2. Regex capture group rewrites (TrafficPolicy.urlRewrite.pathRegex)
+  # 3. Canary deployment (weighted backendRefs)
+  # 4. External auth, CORS, rate limiting (via TrafficPolicy)
+  #
+  - matches:
+    - path:
+        type: PathPrefix
+        value: "/api/i2g/v1/"
+    
+    # URLRewrite filter - simple prefix replacement only
+    # Must use PathPrefix match when using ReplacePrefixMatch
+    # Example: /api/i2g/v1/data → /api/backend/v1/i2g/data
+    filters:
+    - type: URLRewrite
+      urlRewrite:
+        path:
+          type: ReplacePrefixMatch
+          replacePrefixMatch: "/api/backend/v1/i2g/"
+    
+    backendRefs:
+    # Weighted backendRefs for traffic splitting (canary deployment)
+    # Replaces: nginx.ingress.kubernetes.io/canary + canary-weight
+    
+    - name: echo-server          # Stable version
+      port: 8080
+      weight: 80                 # 80% traffic
+    
+    - name: echo-server-canary   # Canary version  
+      port: 8080
+      weight: 20                 # 20% traffic
+    
+    # How it works:
+    # - 80% of requests → echo-server (stable)
+    # - 20% of requests → echo-server-canary
+    # - Session affinity works WITHIN each service (via BackendConfigPolicy)
+    # - Traffic split happens BETWEEN services (via HTTPRoute weights)
+    #
+    # This is MORE flexible than NGINX:
+    # - Can have >2 versions (A/B/C testing)
+    # - Single resource (not 2 separate ingress)
+    # - Weight changes don't require canary ingress recreation
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # Test 19: Method Whitelist (GET only)
+  # NGINX: whitelist-methods: GET
+  # Gateway API: HTTPRouteMatch.method (Standard)
+  # ═══════════════════════════════════════════════════════════════════════
+  - matches:
+    - path:
+        type: PathPrefix
+        value: "/api/method-test/get-only"
+      method: GET
+    backendRefs:
+    - name: echo-server
+      port: 8080
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # Test 19b: Method Whitelist (POST only)
+  # NGINX: whitelist-methods: POST
+  # ═══════════════════════════════════════════════════════════════════════
+  - matches:
+    - path:
+        type: PathPrefix
+        value: "/api/method-test/post-only"
+      method: POST
+    backendRefs:
+    - name: echo-server
+      port: 8080
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # Test 19c: Method Whitelist (GET + PATCH)
+  # NGINX: whitelist-methods: GET, PATCH
+  # Gateway API: Multiple matches with same path, different methods
+  # ═══════════════════════════════════════════════════════════════════════
+  - matches:
+    - path:
+        type: PathPrefix
+        value: "/api/method-test/get-patch"
+      method: GET
+    - path:
+        type: PathPrefix
+        value: "/api/method-test/get-patch"
+      method: PATCH
+    backendRefs:
+    - name: echo-server
+      port: 8080
+
+  # Flaky backend route for retry testing (Test 21)
+  # This backend always returns 503, triggering retry behavior
+  - matches:
+    - path:
+        type: PathPrefix
+        value: "/api/retry-test"
+    backendRefs:
+    - name: flaky-backend
+      port: 8080
+
+# Note: Path rewrite with $1 capture group will be handled by TrafficPolicy
+# NGINX had: rewrite-target: /api/locationspacereader/6.4.1/locationspace/$1
+#
+# Path flow:
+# Client sends: GET /api/locationspace/6.4.1/myspace/data
+#   ↓ (HTTPRoute matches regex)
+# TrafficPolicy transforms to: /api/locationspacereader/6.4.1/locationspace/myspace/data
+#   ↓ (forwarded to backend)
+# echo-server receives and returns the path in JSON response
+# We check the response.request.path field to verify rewrite worked!

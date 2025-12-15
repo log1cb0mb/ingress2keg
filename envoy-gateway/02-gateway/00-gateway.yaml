@@ -1,0 +1,86 @@
+# Gateway for Envoy Gateway implementation
+# Domain: ${DOMAIN}
+# TLS: Certificate managed by cert-manager (see 01-certificate.yaml)
+
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: external-gateway
+  namespace: ingress2envoygateway
+  # Note: cert-manager annotation commented out - using explicit Certificate resource instead
+  # This approach requires only cert-manager with ClusterIssuer, not Gateway API integration
+  # annotations:
+  #   cert-manager.io/cluster-issuer: ${CLUSTER_ISSUER}
+spec:
+  gatewayClassName: eg
+  
+  # Infrastructure configuration
+  # Standard Gateway API field - portable across implementations
+  # 
+  # Note: Service annotations (e.g., Azure internal LB) moved to EnvoyProxy
+  # for consistency - all implementation-specific config in one place.
+  # 
+  # Portable option (commented for reference):
+  #   infrastructure:
+  #     annotations:
+  #       service.beta.kubernetes.io/azure-load-balancer-internal: "true"
+  #
+  infrastructure:
+    # Reference EnvoyProxy for all Envoy-specific settings
+    # (externalTrafficPolicy, service annotations, etc.)
+    # Ref: https://gateway.envoyproxy.io/docs/tasks/operations/customize-envoyproxy/
+    parametersRef:
+      group: gateway.envoyproxy.io
+      kind: EnvoyProxy
+      name: custom-proxy-config
+  
+  listeners:
+  # HTTP listener - for redirect to HTTPS
+  - name: http
+    protocol: HTTP
+    port: 80
+    allowedRoutes:
+      namespaces:
+        from: All
+
+  # HTTPS listener - main traffic (TLS terminated at gateway)
+  - name: https
+    protocol: HTTPS
+    port: 443
+    hostname: "*.${DOMAIN}"
+    tls:
+      mode: Terminate
+      certificateRefs:
+      - name: gateway-tls-cert
+        kind: Secret
+    allowedRoutes:
+      namespaces:
+        from: All
+
+  # TLS Passthrough listener - encrypted traffic passed directly to backend
+  # NGINX equivalent: nginx.ingress.kubernetes.io/ssl-passthrough: "true"
+  # Reference: https://gateway-api.sigs.k8s.io/guides/tls/
+  #
+  # Same port as HTTPS (443) is supported - gateway uses SNI to distinguish:
+  #   - SNI matching specific hostname → TLS Passthrough (this listener)
+  #   - SNI matching wildcard → HTTPS Terminate (https listener)
+  - name: tls-passthrough
+    protocol: TLS
+    port: 443  # Same port as HTTPS - SNI-based routing distinguishes listeners
+    hostname: "nginx-passthrough.${DOMAIN}"
+    tls:
+      mode: Passthrough  # Key setting: traffic NOT terminated at gateway
+    allowedRoutes:
+      namespaces:
+        from: All
+      kinds:
+      - kind: TLSRoute  # Only TLSRoute can attach to Passthrough listeners
+
+# Note: Certificate resource (01-certificate.yaml) creates gateway-tls-cert Secret
+# HTTP listener allows redirect route, HTTPS listener serves actual traffic
+#
+# Envoy Gateway Configuration Notes:
+# - GatewayClass 'eg' is pre-created (see setup)
+# - With deploy.type=GatewayNamespace, Envoy proxy pods deploy in this namespace
+# - ClientTrafficPolicy can be attached to Gateway to configure client IP detection

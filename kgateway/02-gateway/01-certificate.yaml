@@ -1,0 +1,37 @@
+# Wildcard TLS Certificate for Gateway
+# Uses cert-manager to obtain Let's Encrypt certificate
+#
+# This explicit Certificate resource replaces the cert-manager Gateway annotation
+# for better portability - requires only cert-manager with a ClusterIssuer,
+# not cert-manager's Gateway API integration.
+#
+# Prerequisites:
+#   - cert-manager installed
+#   - ClusterIssuer configured (specified in config.env as CLUSTER_ISSUER)
+
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: gateway-tls-cert
+  namespace: ingress2kgateway
+spec:
+  # Secret name referenced by Gateway listeners
+  secretName: gateway-tls-cert
+  
+  # Wildcard certificate covers all subdomains
+  dnsNames:
+    - "*.${DOMAIN}"
+  
+  # Reference to ClusterIssuer (e.g., letsencrypt-production)
+  issuerRef:
+    name: ${CLUSTER_ISSUER}
+    kind: ClusterIssuer
+    group: cert-manager.io
+  
+  # Certificate settings
+  duration: 2160h    # 90 days
+  renewBefore: 360h  # Renew 15 days before expiry
+  
+  privateKey:
+    algorithm: RSA
+    size: 2048

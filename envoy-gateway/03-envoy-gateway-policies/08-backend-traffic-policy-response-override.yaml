@@ -1,0 +1,67 @@
+# BackendTrafficPolicy for Custom HTTP Errors (Response Override)
+# Ref: https://gateway.envoyproxy.io/docs/tasks/traffic/response-override/
+#
+# NGINX equivalent:
+#   nginx.ingress.kubernetes.io/custom-http-errors: "503"
+#   nginx.ingress.kubernetes.io/default-backend: error-pages-svc
+#
+# This is a FEATURE that KGateway OSS lacks!
+# Envoy Gateway can intercept backend error responses and replace with custom content.
+
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: custom-error-policy
+  namespace: ingress2envoygateway
+  labels:
+    test: custom-http-errors-26
+spec:
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: custom-error-test-route
+  
+  # Response Override - intercept backend error codes
+  # NGINX: custom-http-errors: 503
+  responseOverride:
+  - match:
+      statusCodes:
+      - type: Value
+        value: 503
+    response:
+      contentType: "application/json"
+      body:
+        type: Inline
+        inline: '{"error": "Service Temporarily Unavailable", "message": "The backend service is currently unavailable. Please try again later.", "code": 503}'
+  
+  - match:
+      statusCodes:
+      - type: Value
+        value: 502
+    response:
+      contentType: "application/json"
+      body:
+        type: Inline
+        inline: '{"error": "Bad Gateway", "message": "The server received an invalid response from the upstream server.", "code": 502}'
+  
+  - match:
+      statusCodes:
+      - type: Value
+        value: 504
+    response:
+      contentType: "application/json"
+      body:
+        type: Inline
+        inline: '{"error": "Gateway Timeout", "message": "The server did not receive a timely response from the upstream server.", "code": 504}'
+
+# Test 26 Validation:
+# 1. Request to flaky backend (returns 503)
+# 2. Envoy Gateway intercepts 503 response
+# 3. Returns custom JSON error instead of backend's raw 503
+#
+# NGINX → Envoy Gateway Mapping:
+#   custom-http-errors: 503 → responseOverride.match.statusCodes
+#   default-backend → responseOverride.response.body (inline or ValueRef)
+#
+# This is a MAJOR WIN for Envoy Gateway over KGateway OSS!

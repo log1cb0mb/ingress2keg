@@ -1,0 +1,58 @@
+# BackendConfigPolicy for Session Affinity + Connection Timeout
+# Implements NGINX session affinity and proxy-connect-timeout annotations
+
+---
+apiVersion: gateway.kgateway.dev/v1alpha1
+kind: BackendConfigPolicy
+metadata:
+  name: session-affinity-policy
+  namespace: ingress2kgateway
+spec:
+  # Target the echo-server Service
+  targetRefs:
+  - group: ""
+    kind: Service
+    name: echo-server
+  
+  # 1. Connection Timeout
+  # NGINX: proxy-connect-timeout: 10
+  # Time to establish connection to backend (default: varies by Envoy)
+  connectTimeout: 10s
+  
+  # 2. Configure load balancer with cookie-based session affinity
+  loadBalancer:
+    # Use RingHash for consistent hashing (session affinity)
+    ringHash:
+      hashPolicies:
+      - cookie:
+          name: route  # Cookie name (matches NGINX session-cookie-name)
+          ttl: 48h     # 48 hours (matches NGINX session-cookie-max-age: 172800)
+          path: /      # Cookie path
+          httpOnly: false
+          secure: true  # HTTPS only
+        terminal: true  # Use this cookie for hashing, don't check other policies
+
+# NGINX Equivalent:
+# nginx.ingress.kubernetes.io/proxy-connect-timeout: 10
+# nginx.ingress.kubernetes.io/affinity: cookie
+# nginx.ingress.kubernetes.io/affinity-mode: persistent
+# nginx.ingress.kubernetes.io/session-cookie-name: route
+# nginx.ingress.kubernetes.io/session-cookie-max-age: 172800
+#
+# Connection Timeout:
+# - Time allowed to establish TCP connection to backend pod
+# - If exceeded, returns 503 Service Unavailable
+# - Default varies; explicit value recommended for production
+#
+# Session Affinity:
+# 1. First request: Gateway generates 'route' cookie with hash
+# 2. Cookie sent to client in response
+# 3. Subsequent requests: Client sends cookie back
+# 4. Gateway uses cookie value to route to same backend pod
+# 5. Ensures sticky sessions (same client → same pod)
+#
+# Use cases:
+# - Stateful applications (session data in memory)
+# - WebSocket connections
+# - In-memory caching per pod
+# - Shopping carts, user sessions

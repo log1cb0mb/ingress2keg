@@ -1,0 +1,197 @@
+# ============================================================================
+# Test 24: Load Balancing Algorithms (load-balance)
+# ============================================================================
+#
+# NGINX Equivalent:
+#   nginx.ingress.kubernetes.io/load-balance: "round_robin"  (default)
+#   nginx.ingress.kubernetes.io/load-balance: "least_conn"
+#   nginx.ingress.kubernetes.io/load-balance: "ip_hash"
+#   nginx.ingress.kubernetes.io/load-balance: "random"
+#
+# Gateway API:
+#   Standard Gateway API does NOT have native load balancing configuration.
+#   This is implementation-specific (Envoy Gateway uses BackendTrafficPolicy).
+#
+# Envoy Gateway Algorithms:
+#   - RoundRobin → NGINX round_robin (default)
+#   - LeastRequest → NGINX least_conn
+#   - Random → NGINX random
+#   - ConsistentHash → NGINX ip_hash (via cookie/header/sourceIp)
+#
+# ============================================================================
+
+---
+# ============================================================================
+# Test 24a: Round Robin (Default)
+# ============================================================================
+# NGINX: load-balance: round_robin (default, no annotation needed)
+# Envoy Gateway: BackendTrafficPolicy.loadBalancer.type: RoundRobin
+# ============================================================================
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: lb-round-robin-route
+  namespace: ingress2envoygateway
+  labels:
+    app: load-balance-test
+    test: "24a"
+    algorithm: round-robin
+spec:
+  parentRefs:
+  - name: external-gateway
+    namespace: ingress2envoygateway
+    sectionName: https
+  hostnames:
+  - "lb-rr.${DOMAIN}"
+  rules:
+  - matches:
+    - path:
+        type: PathPrefix
+        value: "/"
+    backendRefs:
+    - name: echo-server-lb  # Dedicated service for load-balance tests
+      port: 8080
+
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: round-robin-lb-policy
+  namespace: ingress2envoygateway
+  labels:
+    test: "24a"
+spec:
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: lb-round-robin-route
+  loadBalancer:
+    type: RoundRobin
+    # Slow start gradually increases traffic to new/returning endpoints
+    # Useful for warming up caches, JIT compilation, connection pools
+    slowStart:
+      window: 30s
+
+---
+# ============================================================================
+# Test 24b: Least Request (least_conn equivalent)
+# ============================================================================
+# NGINX: load-balance: least_conn
+# Envoy Gateway: BackendTrafficPolicy.loadBalancer.type: LeastRequest
+#
+# Routes new requests to the endpoint with fewest active connections.
+# Better than Round Robin when backend response times vary.
+# ============================================================================
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: lb-least-request-route
+  namespace: ingress2envoygateway
+  labels:
+    app: load-balance-test
+    test: "24b"
+    algorithm: least-request
+spec:
+  parentRefs:
+  - name: external-gateway
+    namespace: ingress2envoygateway
+    sectionName: https
+  hostnames:
+  - "lb-lr.${DOMAIN}"
+  rules:
+  - matches:
+    - path:
+        type: PathPrefix
+        value: "/"
+    backendRefs:
+    - name: echo-server-lb
+      port: 8080
+
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: least-request-lb-policy
+  namespace: ingress2envoygateway
+  labels:
+    test: "24b"
+spec:
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: lb-least-request-route
+  loadBalancer:
+    type: LeastRequest
+
+---
+# ============================================================================
+# Test 24c: Random
+# ============================================================================
+# NGINX: load-balance: random
+# Envoy Gateway: BackendTrafficPolicy.loadBalancer.type: Random
+#
+# Randomly selects a backend. Simple but effective for uniform backends.
+# ============================================================================
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: lb-random-route
+  namespace: ingress2envoygateway
+  labels:
+    app: load-balance-test
+    test: "24c"
+    algorithm: random
+spec:
+  parentRefs:
+  - name: external-gateway
+    namespace: ingress2envoygateway
+    sectionName: https
+  hostnames:
+  - "lb-random.${DOMAIN}"
+  rules:
+  - matches:
+    - path:
+        type: PathPrefix
+        value: "/"
+    backendRefs:
+    - name: echo-server-lb
+      port: 8080
+
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: random-lb-policy
+  namespace: ingress2envoygateway
+  labels:
+    test: "24c"
+spec:
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: lb-random-route
+  loadBalancer:
+    type: Random
+
+# ============================================================================
+# Load Balancing Algorithm Comparison
+# ============================================================================
+#
+# | Algorithm     | NGINX           | Use Case                              |
+# |---------------|-----------------|---------------------------------------|
+# | RoundRobin    | round_robin     | Equal backends, default choice        |
+# | LeastRequest  | least_conn      | Variable response times               |
+# | Random        | random          | Simple, uniform distribution          |
+# | ConsistentHash| ip_hash/cookie  | Session affinity (see Test 10)        |
+#
+# Testing:
+#   # Round Robin - even distribution
+#   for i in {1..10}; do curl -sk https://lb-rr.${DOMAIN}/ | jq .env.HOSTNAME; done
+#
+#   # Least Request - routes to least busy
+#   for i in {1..10}; do curl -sk https://lb-lr.${DOMAIN}/ | jq .env.HOSTNAME; done
+#
+#   # Random - random distribution
+#   for i in {1..10}; do curl -sk https://lb-random.${DOMAIN}/ | jq .env.HOSTNAME; done
+#
+# ============================================================================

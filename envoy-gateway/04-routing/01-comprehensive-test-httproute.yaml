@@ -1,0 +1,98 @@
+# HTTPRoute for comprehensive feature testing
+# Tests: External auth, CORS, timeouts, body-size, rate limiting, path rewrite, canary
+
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: comprehensive-test-route
+  namespace: ingress2envoygateway
+  labels:
+    app: comprehensive-test
+    test-type: full-feature-validation
+spec:
+  parentRefs:
+  - name: external-gateway
+    namespace: ingress2envoygateway
+    sectionName: https
+  
+  hostnames:
+  - "eg.${DOMAIN}"
+  
+  rules:
+  # Main comprehensive test route
+  # FEATURES TESTED:
+  # 1. Simple prefix rewrites (ReplacePrefixMatch)
+  # 2. Canary deployment (weighted backendRefs)
+  # 3. External auth, CORS, rate limiting (via SecurityPolicy/BackendTrafficPolicy)
+  - matches:
+    - path:
+        type: PathPrefix
+        value: "/api/eg/v1/"
+    
+    # URLRewrite filter - simple prefix replacement
+    # Example: /api/eg/v1/data → /api/backend/v1/eg/data
+    filters:
+    - type: URLRewrite
+      urlRewrite:
+        path:
+          type: ReplacePrefixMatch
+          replacePrefixMatch: "/api/backend/v1/eg/"
+    
+    backendRefs:
+    # Weighted backendRefs for traffic splitting (canary deployment)
+    # Replaces: nginx.ingress.kubernetes.io/canary + canary-weight
+    - name: echo-server
+      port: 8080
+      weight: 80                 # 80% traffic
+    
+    - name: echo-server-canary
+      port: 8080
+      weight: 20                 # 20% traffic
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # Test 19: Method Whitelist (GET only)
+  # NGINX: whitelist-methods: GET
+  # Gateway API: HTTPRouteMatch.method (Standard)
+  # ═══════════════════════════════════════════════════════════════════════
+  - matches:
+    - path:
+        type: PathPrefix
+        value: "/api/method-test/get-only"
+      method: GET
+    backendRefs:
+    - name: echo-server
+      port: 8080
+
+  # Test 19b: Method Whitelist (POST only)
+  - matches:
+    - path:
+        type: PathPrefix
+        value: "/api/method-test/post-only"
+      method: POST
+    backendRefs:
+    - name: echo-server
+      port: 8080
+
+  # Test 19c: Method Whitelist (GET + PATCH)
+  - matches:
+    - path:
+        type: PathPrefix
+        value: "/api/method-test/get-patch"
+      method: GET
+    - path:
+        type: PathPrefix
+        value: "/api/method-test/get-patch"
+      method: PATCH
+    backendRefs:
+    - name: echo-server
+      port: 8080
+
+  # Flaky backend route for retry testing (Test 21)
+  - matches:
+    - path:
+        type: PathPrefix
+        value: "/api/retry-test"
+    backendRefs:
+    - name: flaky-backend
+      port: 8080

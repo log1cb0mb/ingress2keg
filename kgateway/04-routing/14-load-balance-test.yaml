@@ -1,0 +1,302 @@
+# ============================================================================
+# Test 24: Load Balancing Algorithms (load-balance)
+# ============================================================================
+#
+# NGINX Equivalent:
+#   nginx.ingress.kubernetes.io/load-balance: "round_robin"  (default)
+#   nginx.ingress.kubernetes.io/load-balance: "least_conn"
+#   nginx.ingress.kubernetes.io/load-balance: "ip_hash"
+#   nginx.ingress.kubernetes.io/load-balance: "ewma"
+#   nginx.ingress.kubernetes.io/load-balance: "random"
+#
+# Gateway API:
+#   Standard Gateway API does NOT have native load balancing configuration.
+#   This is implementation-specific (KGateway uses BackendConfigPolicy).
+#
+# KGateway Algorithms:
+#   - roundRobin  → NGINX round_robin (default)
+#   - leastRequest → NGINX least_conn
+#   - random → NGINX random
+#   - ringHash → NGINX ip_hash (via cookie/header/sourceIp)
+#   - maglev → No NGINX equivalent (Google's consistent hashing)
+#
+# ============================================================================
+# TEST RESULTS & INTERPRETATION
+# ============================================================================
+#
+# What We Validated:
+#   ✅ Policy syntax correct (CRD applied without error)
+#   ✅ Policy accepted (ACCEPTED: True)
+#   ✅ Policy attached to Service (ATTACHED: True)
+#   ✅ Load distribution working (requests spread across 3 replicas)
+#   ✅ No failed requests under stress (100 requests, 10 concurrent)
+#
+# Stress Test Results (Apache Benchmark):
+#   Round Robin:    8.71 req/sec, 1148ms/request, 0 failures
+#   Least Request:  8.78 req/sec, 1138ms/request, 0 failures
+#
+# Pod Distribution (50 concurrent requests):
+#   Round Robin:    17-17-16 across 3 pods (~33% each)
+#   Least Request:  18-17-15 across 3 pods (~33% each)
+#
+# Why Distributions Are Similar:
+#   Both algorithms show ~equal distribution because all backend pods
+#   respond equally fast (~115ms) and have similar active connection counts.
+#   leastRequest routes to pod with FEWEST ACTIVE CONNECTIONS, not response times.
+#
+# When leastRequest Outperforms roundRobin:
+#   - Sustained concurrent load where connections pile up
+#   - One pod slower → more active connections accumulate
+#   - leastRequest sees higher connection count → routes new requests elsewhere
+#   - Effect: Indirect avoidance of slow pods through connection counting
+#
+# Conclusion:
+#   This is CONFIGURATION VALIDATION, not algorithm behavioral testing.
+#   The mapping from NGINX load-balance → KGateway BackendConfigPolicy works.
+#   Behavioral differences require heterogeneous backend response times.
+#
+# ============================================================================
+
+---
+# ============================================================================
+# Test 24a: Round Robin with Slow Start
+# ============================================================================
+# NGINX: load-balance: round_robin (default, no annotation needed)
+# KGateway: BackendConfigPolicy.loadBalancer.roundRobin
+#
+# Slow Start: Gradually increases traffic to new/returning endpoints
+# Useful for warming up caches, JIT compilation, connection pools
+# ============================================================================
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: lb-round-robin-route
+  namespace: ingress2kgateway
+  labels:
+    app: load-balance-test
+    test: "24a"
+    algorithm: round-robin
+spec:
+  parentRefs:
+  - name: external-gateway
+    namespace: ingress2kgateway
+    sectionName: https
+  hostnames:
+  - "lb-rr.${DOMAIN}"
+  rules:
+  - matches:
+    - path:
+        type: PathPrefix
+        value: "/"
+    backendRefs:
+    - name: echo-server-lb  # Dedicated service for load-balance tests
+      port: 8080
+
+---
+apiVersion: gateway.kgateway.dev/v1alpha1
+kind: BackendConfigPolicy
+metadata:
+  name: round-robin-lb-policy
+  namespace: ingress2kgateway
+  labels:
+    app: load-balance-test
+    test: "24a"
+    algorithm: round-robin
+spec:
+  targetRefs:
+  - group: ""
+    kind: Service
+    name: echo-server-lb  # Dedicated service for load-balance tests
+  loadBalancer:
+    roundRobin:
+      # Slow Start: Ramp up traffic to new endpoints gradually
+      # Useful for warming up caches, JIT compilation, connection pools
+      slowStart:
+        # Window: Duration of slow start period
+        window: "60s"
+        # Aggression: Controls speed of traffic increase (default 1.0 = linear)
+        # Higher values = faster ramp-up (exponential curve)
+        aggression: "1.0"
+        # MinWeightPercent: Minimum traffic percentage during slow start
+        minWeightPercent: 10
+
+---
+# ============================================================================
+# Test 24b: Least Request (equivalent to NGINX least_conn)
+# ============================================================================
+# NGINX: load-balance: least_conn
+# KGateway: BackendConfigPolicy.loadBalancer.leastRequest
+#
+# Routes to server with fewest active requests.
+# More effective than round-robin when request processing times vary.
+# ============================================================================
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: lb-least-request-route
+  namespace: ingress2kgateway
+  labels:
+    app: load-balance-test
+    test: "24b"
+    algorithm: least-request
+spec:
+  parentRefs:
+  - name: external-gateway
+    namespace: ingress2kgateway
+    sectionName: https
+  hostnames:
+  - "lb-lc.${DOMAIN}"
+  rules:
+  - matches:
+    - path:
+        type: PathPrefix
+        value: "/"
+    backendRefs:
+    - name: echo-server-lb  # Dedicated service for load-balance tests
+      port: 8080
+
+---
+apiVersion: gateway.kgateway.dev/v1alpha1
+kind: BackendConfigPolicy
+metadata:
+  name: least-request-lb-policy
+  namespace: ingress2kgateway
+  labels:
+    app: load-balance-test
+    test: "24b"
+    algorithm: least-request
+spec:
+  targetRefs:
+  - group: ""
+    kind: Service
+    name: echo-server-lb  # Dedicated service for load-balance tests
+  loadBalancer:
+    leastRequest:
+      # ChoiceCount: Number of random healthy hosts to compare (default: 2)
+      # Higher values = better load distribution but more overhead
+      choiceCount: 5
+      # Slow Start: Also available for leastRequest
+      slowStart:
+        window: "30s"
+        aggression: "1.5"  # Faster ramp-up than linear
+        minWeightPercent: 5
+
+---
+# ============================================================================
+# SAMPLE CONFIGURATIONS (Commented - uncomment to test)
+# ============================================================================
+
+# ============================================================================
+# Option 3: Random Load Balancing
+# ============================================================================
+# NGINX: load-balance: random
+# KGateway: BackendConfigPolicy.loadBalancer.random
+#
+# Simple random selection - useful for testing or when all backends identical
+# ============================================================================
+# apiVersion: gateway.kgateway.dev/v1alpha1
+# kind: BackendConfigPolicy
+# metadata:
+#   name: random-lb-policy
+#   namespace: ingress2kgateway
+# spec:
+#   targetRefs:
+#   - group: ""
+#     kind: Service
+#     name: echo-server
+#   loadBalancer:
+#     random: {}
+
+# ============================================================================
+# Option 4: Ring Hash (Consistent Hashing)
+# ============================================================================
+# NGINX: load-balance: ip_hash (sticky based on client IP)
+# KGateway: BackendConfigPolicy.loadBalancer.ringHash
+#
+# Consistent hashing ensures same client goes to same backend.
+# More flexible than ip_hash - can hash on cookie, header, sourceIp, queryParam
+# ============================================================================
+# apiVersion: gateway.kgateway.dev/v1alpha1
+# kind: BackendConfigPolicy
+# metadata:
+#   name: ring-hash-lb-policy
+#   namespace: ingress2kgateway
+# spec:
+#   targetRefs:
+#   - group: ""
+#     kind: Service
+#     name: echo-server
+#   loadBalancer:
+#     ringHash:
+#       # Close existing connections when backend set changes
+#       # Ensures consistent routing after changes
+#       # closeConnectionsOnHostSetChange: true
+#       
+#       # Use hostname instead of IP for hashing (useful with DNS)
+#       # useHostnameForHashing: false
+#       
+#       hashPolicies:
+#       # Option A: Hash on source IP (like NGINX ip_hash)
+#       - sourceIp: true
+#       
+#       # Option B: Hash on a cookie (session affinity)
+#       # - cookie:
+#       #     name: "SERVERID"
+#       #     ttl: "86400s"
+#       #     path: "/"
+#       #     httpOnly: true
+#       #     secure: true
+#       #     sameSite: Strict  # Strict, Lax, or None
+#       
+#       # Option C: Hash on a header
+#       # - header:
+#       #     name: "X-User-ID"
+#       
+#       # Option D: Hash on a query parameter
+#       # - queryParameter:
+#       #     name: "session_id"
+
+# ============================================================================
+# Option 5: Maglev (Advanced Consistent Hashing)
+# ============================================================================
+# NGINX: No equivalent (Google's advanced algorithm)
+# KGateway: BackendConfigPolicy.loadBalancer.maglev
+#
+# More stable than ring hash during backend changes.
+# Better for high-scale systems with frequent backend changes.
+# ============================================================================
+# apiVersion: gateway.kgateway.dev/v1alpha1
+# kind: BackendConfigPolicy
+# metadata:
+#   name: maglev-lb-policy
+#   namespace: ingress2kgateway
+# spec:
+#   targetRefs:
+#   - group: ""
+#     kind: Service
+#     name: echo-server
+#   loadBalancer:
+#     maglev:
+#       hashPolicies:
+#       - header:
+#           name: "X-Tenant-ID"
+#       # useHostnameForHashing: false
+
+# ============================================================================
+# Additional Load Balancer Settings (apply to any algorithm)
+# ============================================================================
+# These can be added to any BackendConfigPolicy:
+#
+# loadBalancer:
+#   # Healthy Panic Threshold: When healthy hosts fall below this %,
+#   # Envoy ignores health status and routes to all hosts
+#   # Default: 50 (50%)
+#   healthyPanicThreshold: 50
+#   
+#   # Locality Type: Zone-aware load balancing
+#   # WeightedLb - Prefer local zone, fallback to others
+#   localityType: WeightedLb
+#   
+#   # Update Merge Window: Batch endpoint updates to reduce CPU
+#   # Default: 1s. Set to 0 for immediate updates.
+#   updateMergeWindow: "1s"

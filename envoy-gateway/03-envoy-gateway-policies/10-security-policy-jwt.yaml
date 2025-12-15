@@ -1,0 +1,125 @@
+# JWT Authentication (Native Token Validation)
+# ═══════════════════════════════════════════════════════════════════════════════
+# 
+# NGINX Annotations:
+#   JWT validation is NOT directly supported in NGINX Ingress open-source.
+#   - NGINX Plus (commercial) supports JWT validation
+#   - Open-source requires external service (oauth2-proxy, ext-auth)
+#
+# Envoy Gateway:
+#   Built-in JWT validation via SecurityPolicy.jwt
+#   - No external service required!
+#   - Supports remote JWKS for automatic key rotation
+#   - Claim extraction to headers (claimToHeaders)
+#
+# Docs: https://gateway.envoyproxy.io/docs/tasks/security/jwt/
+#
+# TEST COMMANDS:
+#   # Get a JWT token (Azure AD example):
+#   az login
+#   TOKEN=$(az account get-access-token --resource ${OIDC_CLIENT_ID} --query accessToken -o tsv)
+#
+#   # Test without token (should fail - 401):
+#   curl -v https://eg.${DOMAIN}/api/jwt-auth/test
+#
+#   # Test with valid JWT token (should pass - 200):
+#   curl -v -H "Authorization: Bearer $TOKEN" https://eg.${DOMAIN}/api/jwt-auth/test
+#
+# ═══════════════════════════════════════════════════════════════════════════════
+
+---
+# HTTPRoute for JWT auth endpoint
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: jwt-auth-route
+  namespace: ingress2envoygateway
+  labels:
+    test-case: jwt-auth
+spec:
+  parentRefs:
+  - name: external-gateway
+    sectionName: https  # IMPORTANT: Attach only to HTTPS listener
+  hostnames:
+  - "eg.${DOMAIN}"
+  rules:
+  - matches:
+    - path:
+        type: PathPrefix
+        value: /api/jwt-auth/
+    backendRefs:
+    - name: echo-server
+      port: 8080
+
+---
+# SecurityPolicy with JWT validation
+# Uses OIDC_ISSUER_URL and OIDC_CLIENT_ID from config.env
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: SecurityPolicy
+metadata:
+  name: jwt-auth-policy
+  namespace: ingress2envoygateway
+  labels:
+    test-case: jwt-auth
+spec:
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: jwt-auth-route
+  jwt:
+    providers:
+    # Primary provider - configured via config.env
+    - name: oidc-provider
+      # OIDC issuer URL - auto-discovers JWKS from .well-known/openid-configuration
+      # Examples:
+      #   Azure AD v2: https://login.microsoftonline.com/<tenant-id>/v2.0
+      #   Google: https://accounts.google.com
+      #   Okta: https://<org>.okta.com
+      issuer: "${OIDC_ISSUER_URL}"
+      # Expected audience (your app's client ID)
+      audiences:
+      - "${OIDC_CLIENT_ID}"
+      # JWKS endpoint for token verification (automatic key rotation)
+      # If not set, Envoy will use issuer + /.well-known/jwks.json
+      # Azure AD: https://login.microsoftonline.com/<tenant>/discovery/v2.0/keys
+      # Generic: ${OIDC_ISSUER_URL}/.well-known/jwks.json
+      remoteJWKS:
+        uri: "${OIDC_JWKS_URL}"
+      # Extract common claims and pass as headers to backend
+      # These are standard OIDC claims supported by most providers
+      claimToHeaders:
+      - claim: sub
+        header: X-JWT-Subject
+      - claim: email
+        header: X-JWT-Email
+      - claim: name
+        header: X-JWT-Name
+      - claim: preferred_username
+        header: X-JWT-Username
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# NGINX → Envoy Gateway Comparison
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# NGINX Ingress (open-source):
+#   - No built-in JWT support
+#   - Requires external service (oauth2-proxy) or custom ext-auth
+#   - More complex setup with additional deployments
+#
+# NGINX Plus (commercial):
+#   - Built-in JWT validation
+#   - Similar capability to Envoy Gateway
+#
+# Envoy Gateway:
+#   - Built-in JWT validation (SecurityPolicy.jwt)
+#   - Supports multiple providers in same policy
+#   - Automatic JWKS key rotation via remoteJWKS
+#   - Claim-to-header extraction (no custom code needed)
+#   - No external service required!
+#
+# Key Advantage:
+#   Envoy Gateway's native JWT support eliminates the need for oauth2-proxy
+#   for simple token validation scenarios. For full OIDC flow (login/logout),
+#   use SecurityPolicy.oidc instead.
+#
+# ═══════════════════════════════════════════════════════════════════════════════

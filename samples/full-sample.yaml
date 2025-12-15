@@ -1,0 +1,312 @@
+# NGINX Ingress Sample - Common Annotations Reference
+# This sample demonstrates NGINX Ingress annotations and their Gateway API equivalents
+# Validated with both KGateway and Envoy Gateway implementations
+#
+# See coverage/README.md for full documentation
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: comprehensive-sample
+  namespace: store
+  annotations:
+    # ═══════════════════════════════════════════════════════════════════
+    # EXTERNAL AUTHENTICATION (Tests 1-2)
+    # KGateway: GatewayExtension.extAuth
+    # Envoy Gateway: SecurityPolicy.extAuth
+    # ═══════════════════════════════════════════════════════════════════
+    nginx.ingress.kubernetes.io/auth-url: https://auth.example.com/api/tokenExchange
+    nginx.ingress.kubernetes.io/auth-response-headers: authorization
+    # ⚠️ Limitations (not supported by Gateway implementations - implement in auth service):
+    nginx.ingress.kubernetes.io/auth-cache-key: $http_token$http_authorization
+    nginx.ingress.kubernetes.io/auth-cache-duration: 200 202 204 401 5m
+    
+    # ═══════════════════════════════════════════════════════════════════
+    # OAUTH2 SIGN-IN (Test 22)
+    # KGateway: GatewayExtension.oauth2 (NATIVE - no oauth2-proxy needed!)
+    # Envoy Gateway: SecurityPolicy.oidc
+    # ═══════════════════════════════════════════════════════════════════
+    nginx.ingress.kubernetes.io/auth-signin: https://oauth.example.com/oauth2/start?rd=$scheme://$host$request_uri
+    # nginx.ingress.kubernetes.io/auth-url: https://oauth.example.com/oauth2/auth  # (when used with auth-signin for OAuth2)
+    
+    # GLOBAL AUTH (Documented)
+    # KGateway: TrafficPolicy → Gateway (applies auth to ALL routes)
+    # Envoy Gateway: SecurityPolicy → Gateway
+    nginx.ingress.kubernetes.io/enable-global-auth: "true"
+    
+    # ═══════════════════════════════════════════════════════════════════
+    # APP ROOT REDIRECT (Test 23)
+    # Standard Gateway API: HTTPRoute.RequestRedirect (portable!)
+    # Redirects / to specified application path (302)
+    # ═══════════════════════════════════════════════════════════════════
+    nginx.ingress.kubernetes.io/app-root: /openapi-ui.html
+    
+    # ═══════════════════════════════════════════════════════════════════
+    # LOAD BALANCING (Test 24)
+    # KGateway: BackendConfigPolicy.loadBalancer
+    # Envoy Gateway: BackendTrafficPolicy.loadBalancer
+    # Options: roundRobin, leastRequest (least_conn), random, consistentHash (ip_hash)
+    # ═══════════════════════════════════════════════════════════════════
+    nginx.ingress.kubernetes.io/load-balance: "least_conn"
+    
+    # ═══════════════════════════════════════════════════════════════════
+    # SERVER SNIPPET - HTTP REJECTION (Test 25)
+    # KGateway: DirectResponse + HTTPRoute.ExtensionRef
+    # Envoy Gateway: HTTPRouteFilter.directResponse
+    # Pattern: Reject HTTP with custom JSON error (instead of redirect)
+    # ═══════════════════════════════════════════════════════════════════
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+    nginx.ingress.kubernetes.io/server-snippet: |
+      default_type application/json;
+      if ( $scheme = http ){
+        return 400 '{"type": "https://example.com/errors/400","title": "Bad Request"}';
+      }
+    
+    # ═══════════════════════════════════════════════════════════════════
+    # CUSTOM HTTP ERRORS (Test 26)
+    # KGateway: ❌ Not supported (✅ Available in Gloo Gateway)
+    # Envoy Gateway: ✅ BackendTrafficPolicy.responseOverride
+    # ═══════════════════════════════════════════════════════════════════
+    nginx.ingress.kubernetes.io/custom-http-errors: "503,504"
+    nginx.ingress.kubernetes.io/default-backend: error-pages
+    
+    # ═══════════════════════════════════════════════════════════════════
+    # IP WHITELISTING (Test 3)
+    # KGateway: TrafficPolicy.rbac (CEL expressions)
+    # Envoy Gateway: SecurityPolicy.authorization
+    # ═══════════════════════════════════════════════════════════════════
+    nginx.ingress.kubernetes.io/whitelist-source-range: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+    
+    # ═══════════════════════════════════════════════════════════════════
+    # CORS CONFIGURATION (Test 4 - 7 annotations)
+    # KGateway: TrafficPolicy.cors
+    # Envoy Gateway: SecurityPolicy.cors
+    # ═══════════════════════════════════════════════════════════════════
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+    nginx.ingress.kubernetes.io/cors-allow-origin: "https://*.example.com,http://localhost:4200"
+    nginx.ingress.kubernetes.io/cors-allow-methods: "GET, POST, PUT, DELETE, PATCH, OPTIONS"
+    nginx.ingress.kubernetes.io/cors-allow-headers: keep-alive,user-agent,x-requested-with,if-modified-since,cache-control,content-type,token,account,api-version,x-trace-id
+    nginx.ingress.kubernetes.io/cors-allow-credentials: "true"
+    nginx.ingress.kubernetes.io/cors-expose-headers: "Content-Disposition, X-Request-Id"
+    nginx.ingress.kubernetes.io/cors-max-age: "86400"
+    
+    # ═══════════════════════════════════════════════════════════════════
+    # RATE LIMITING (Test 5)
+    # KGateway: TrafficPolicy.rateLimit.local.tokenBucket
+    # Envoy Gateway: BackendTrafficPolicy.rateLimit
+    # ═══════════════════════════════════════════════════════════════════
+    nginx.ingress.kubernetes.io/limit-rps: "100"
+    # nginx.ingress.kubernetes.io/limit-rpm: "600"  # alternative: per-minute
+    nginx.ingress.kubernetes.io/limit-burst-multiplier: "5"
+    
+    # ═══════════════════════════════════════════════════════════════════
+    # PATH REWRITE (Tests 6-7)
+    # Standard: HTTPRoute.URLRewrite.ReplacePrefixMatch (portable)
+    # KGateway: TrafficPolicy.urlRewrite.pathRegex (for regex)
+    # Envoy Gateway: HTTPRouteFilter.urlRewrite (for regex)
+    # ═══════════════════════════════════════════════════════════════════
+    nginx.ingress.kubernetes.io/use-regex: "true"
+    nginx.ingress.kubernetes.io/rewrite-target: /api/backend/v1/i2g/$1
+    
+    # ═══════════════════════════════════════════════════════════════════
+    # BODY SIZE / BUFFER (Test 8)
+    # KGateway: TrafficPolicy.buffer.maxRequestSize
+    # Envoy Gateway: ClientTrafficPolicy.connection.bufferLimit
+    # ═══════════════════════════════════════════════════════════════════
+    nginx.ingress.kubernetes.io/proxy-body-size: 100m
+    
+    # ═══════════════════════════════════════════════════════════════════
+    # TIMEOUTS (Tests 9, 15)
+    # Standard: HTTPRoute.timeouts (request, backendRequest)
+    # KGateway: TrafficPolicy.timeouts + BackendConfigPolicy.connectTimeout
+    # Envoy Gateway: BackendTrafficPolicy.timeout
+    # ═══════════════════════════════════════════════════════════════════
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "10"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    
+    # ═══════════════════════════════════════════════════════════════════
+    # SESSION AFFINITY (Test 10)
+    # KGateway: BackendConfigPolicy.loadBalancer.ringHash
+    # Envoy Gateway: BackendTrafficPolicy.loadBalancer.consistentHash
+    # ═══════════════════════════════════════════════════════════════════
+    nginx.ingress.kubernetes.io/affinity: cookie
+    nginx.ingress.kubernetes.io/affinity-mode: persistent
+    nginx.ingress.kubernetes.io/session-cookie-name: route
+    nginx.ingress.kubernetes.io/session-cookie-max-age: "172800"
+    nginx.ingress.kubernetes.io/session-cookie-expires: "172800"
+    
+    # ═══════════════════════════════════════════════════════════════════
+    # CANARY DEPLOYMENT (Test 11)
+    # Standard Gateway API: HTTPRoute.backendRefs[].weight (portable!)
+    # ═══════════════════════════════════════════════════════════════════
+    nginx.ingress.kubernetes.io/canary: "true"
+    nginx.ingress.kubernetes.io/canary-weight: "20"
+    
+    # ═══════════════════════════════════════════════════════════════════
+    # CONFIGURATION SNIPPET (Tests 12-14, 17)
+    # - Gzip compression (Test 12)
+    # - Request header modification (Test 13)
+    # - Response header modification (Test 14)
+    # - Backend TLS SNI (Test 17)
+    # ═══════════════════════════════════════════════════════════════════
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      gzip on;
+      gzip_types application/json;
+      more_set_input_headers 'Accept: text/plain';
+      more_set_headers 'X-Cluster-Name: gateway-test';
+      proxy_ssl_name "backend.namespace.svc.cluster.local";
+    
+    # ═══════════════════════════════════════════════════════════════════
+    # SSL REDIRECT (Test 16)
+    # Standard Gateway API: HTTPRoute.RequestRedirect (portable!)
+    # ═══════════════════════════════════════════════════════════════════
+    #nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    
+    # ═══════════════════════════════════════════════════════════════════
+    # BACKEND TLS (Test 17)
+    # Standard: BackendTLSPolicy (simple TLS - portable)
+    # KGateway: BackendConfigPolicy.tls (mTLS)
+    # Envoy Gateway: Backend resource (mTLS)
+    # ═══════════════════════════════════════════════════════════════════
+    nginx.ingress.kubernetes.io/proxy-ssl-secret: namespace/tls-secret
+    
+    # ═══════════════════════════════════════════════════════════════════
+    # BACKEND PROTOCOL (Documented)
+    # Standard Gateway API: Service.appProtocol + BackendTLSPolicy/GRPCRoute
+    # ═══════════════════════════════════════════════════════════════════
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
+    # For gRPC: nginx.ingress.kubernetes.io/backend-protocol: "GRPC"
+    
+    # ═══════════════════════════════════════════════════════════════════
+    # TLS PASSTHROUGH (Test 18)
+    # Standard Gateway API: Gateway (tls.mode: Passthrough) + TLSRoute
+    # Note: Typically on SEPARATE Ingress - L7 policies not applicable
+    # ═══════════════════════════════════════════════════════════════════
+    # nginx.ingress.kubernetes.io/ssl-passthrough: "true"  # (separate Ingress)
+    
+    # ═══════════════════════════════════════════════════════════════════
+    # HTTP METHOD WHITELISTING (Test 19)
+    # Standard Gateway API: HTTPRouteMatch.method (portable!)
+    # ═══════════════════════════════════════════════════════════════════
+    nginx.ingress.kubernetes.io/whitelist-methods: "GET, POST"
+    
+    # ═══════════════════════════════════════════════════════════════════
+    # BASIC AUTHENTICATION (Test 20)
+    # KGateway: TrafficPolicy.basicAuth
+    # Envoy Gateway: SecurityPolicy.basicAuth
+    # Note: auth-realm is cosmetic only (browser popup message)
+    # ═══════════════════════════════════════════════════════════════════
+    nginx.ingress.kubernetes.io/auth-type: basic
+    nginx.ingress.kubernetes.io/auth-secret: basic-auth
+    nginx.ingress.kubernetes.io/auth-realm: "Authentication Required"
+    
+    # ═══════════════════════════════════════════════════════════════════
+    # RETRY POLICY (Test 21)
+    # KGateway: TrafficPolicy.retry
+    # Envoy Gateway: BackendTrafficPolicy.retry
+    # ═══════════════════════════════════════════════════════════════════
+    nginx.ingress.kubernetes.io/proxy-next-upstream-tries: "3"
+    
+    # ═══════════════════════════════════════════════════════════════════
+    # CONNECTION LIMITS (Documented)
+    # No per-IP equivalent in Gateway implementations
+    # Alternatives: circuit breakers, rate limiting, RBAC
+    # ═══════════════════════════════════════════════════════════════════
+    nginx.ingress.kubernetes.io/limit-connections: "200"
+
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: app.example.com
+    http:
+      paths:
+      - backend:
+          service:
+            name: backend-service
+            port:
+              number: 80
+        path: /api/i2g/v1/(.*)
+        pathType: ImplementationSpecific
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# NGINX → GATEWAY API MAPPING REFERENCE
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# ┌────────────────────────────────┬──────────────────────────────────────────┬──────────────────────────────────────────┐
+# │ NGINX Annotation               │ KGateway                                 │ Envoy Gateway                            │
+# ├────────────────────────────────┼──────────────────────────────────────────┼──────────────────────────────────────────┤
+# │ auth-url                       │ GatewayExtension.extAuth                 │ SecurityPolicy.extAuth                   │
+# │ auth-response-headers          │ headersToBackend                         │ headersToBackend                         │
+# │ auth-signin (OAuth2)           │ GatewayExtension.oauth2 (native!)        │ SecurityPolicy.oidc                      │
+# │ auth-type: basic               │ TrafficPolicy.basicAuth                  │ SecurityPolicy.basicAuth                 │
+# │ auth-secret                    │ TrafficPolicy.basicAuth.secretRef        │ SecurityPolicy.basicAuth.secretRef       │
+# │ whitelist-source-range         │ TrafficPolicy.rbac (CEL)                 │ SecurityPolicy.authorization             │
+# │ enable-cors + cors-*           │ TrafficPolicy.cors                       │ SecurityPolicy.cors                      │
+# │ limit-rps / limit-rpm          │ TrafficPolicy.rateLimit                  │ BackendTrafficPolicy.rateLimit           │
+# │ rewrite-target                 │ HTTPRoute.URLRewrite (Standard)          │ HTTPRoute.URLRewrite (Standard)          │
+# │ use-regex + rewrite-target     │ TrafficPolicy.urlRewrite.pathRegex       │ HTTPRouteFilter.urlRewrite               │
+# │ proxy-body-size                │ TrafficPolicy.buffer                     │ ClientTrafficPolicy.bufferLimit          │
+# │ proxy-read-timeout             │ TrafficPolicy.timeouts.request           │ BackendTrafficPolicy.timeout             │
+# │ proxy-connect-timeout          │ BackendConfigPolicy.connectTimeout       │ BackendTrafficPolicy.timeout.tcp         │
+# │ affinity + session-cookie-*    │ BackendConfigPolicy.ringHash             │ BackendTrafficPolicy.consistentHash      │
+# │ canary + canary-weight         │ HTTPRoute.backendRefs[].weight (Std)     │ HTTPRoute.backendRefs[].weight (Std)     │
+# │ configuration-snippet (gzip)   │ TrafficPolicy.compression                │ BackendTrafficPolicy.compressor          │
+# │ configuration-snippet (headers)│ HTTPRoute filters (Standard)             │ HTTPRoute filters (Standard)             │
+# │ ssl-redirect                   │ HTTPRoute.RequestRedirect (Standard)     │ HTTPRoute.RequestRedirect (Standard)     │
+# │ proxy-ssl-secret               │ BackendConfigPolicy.tls (mTLS)           │ Backend.tls (mTLS)                       │
+# │ ssl-passthrough                │ Gateway + TLSRoute (Standard)            │ Gateway + TLSRoute (Standard)            │
+# │ whitelist-methods              │ HTTPRouteMatch.method (Standard)         │ HTTPRouteMatch.method (Standard)         │
+# │ proxy-next-upstream-tries      │ TrafficPolicy.retry                      │ BackendTrafficPolicy.retry               │
+# │ app-root                       │ HTTPRoute.RequestRedirect (Standard)     │ HTTPRoute.RequestRedirect (Standard)     │
+# │ load-balance                   │ BackendConfigPolicy.loadBalancer         │ BackendTrafficPolicy.loadBalancer        │
+# │ upstream-vhost                 │ HTTPRoute.URLRewrite.hostname (Std)      │ HTTPRoute.URLRewrite.hostname (Std)      │
+# │ server-snippet                 │ DirectResponse + ExtensionRef            │ HTTPRouteFilter.directResponse           │
+# │ custom-http-errors             │ ❌ (Gloo Gateway ✅)                      │ BackendTrafficPolicy.responseOverride    │
+# └────────────────────────────────┴──────────────────────────────────────────┴──────────────────────────────────────────┘
+#
+# ⚠️ KNOWN LIMITATIONS:
+# - auth-cache-key/auth-cache-duration: Implement caching in auth service (Redis)
+# - Negative lookahead regex (?!...): Use route ordering instead (RE2 limitation)
+# - auth-realm: Cosmetic only (browser popup message) - not supported
+#
+# ═══════════════════════════════════════════════════════════════════════════
+# GATEWAY API RESOURCES STRUCTURE
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Gateway
+#    │
+#    ├── HTTPS Listener (tls.mode: Terminate) ─► HTTPRoute (L7 features)
+#    │
+#    ├── TLS Listener (tls.mode: Passthrough) ─► TLSRoute (L4 only)
+#    │      Note: No L7 policies for passthrough - traffic stays encrypted
+#    │
+#    ├── HTTPRoute (path + method matching, URL rewrite, traffic splitting)
+#    │      │
+#    │      ├── [KGateway] TrafficPolicy (attached to HTTPRoute)
+#    │      │      - extAuth, oauth2, basicAuth, rbac, cors, rateLimit
+#    │      │      - buffer, timeouts, compression, headerModifiers
+#    │      │      - urlRewrite.pathRegex, retry, csrf
+#    │      │
+#    │      └── [Envoy Gateway] Policies (attached to HTTPRoute or Gateway)
+#    │             - SecurityPolicy: extAuth, oidc, basicAuth, cors, authorization
+#    │             - BackendTrafficPolicy: rateLimit, timeout, retry, loadBalancer
+#    │             - ClientTrafficPolicy: bufferLimit, connection settings
+#    │             - HTTPRouteFilter: regex rewrite, direct response
+#    │
+#    └── Service (backend)
+#           │
+#           ├── BackendTLSPolicy (Standard - portable across implementations)
+#           │      - validation.hostname (SNI)
+#           │      - caCertificateRefs (CA for server validation)
+#           │
+#           ├── [KGateway] BackendConfigPolicy
+#           │      - connectTimeout, loadBalancer (ringHash, leastRequest, etc.)
+#           │      - tls.sni, tls.secretRef (mTLS)
+#           │
+#           └── [Envoy Gateway] Backend resource
+#                  - tls.sni, tls.caCertificateRefs, tls.clientCertificateRef (mTLS)
+#
+# ═══════════════════════════════════════════════════════════════════════════

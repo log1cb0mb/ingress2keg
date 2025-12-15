@@ -1,0 +1,9 @@
+# Namespace for Envoy Gateway coverage testing
+# Note: With deploy.type=GatewayNamespace, Envoy proxy pods deploy here
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ingress2envoygateway
+  labels:
+    app.kubernetes.io/name: ingress2envoygateway
+    app.kubernetes.io/part-of: ingress2gateway-coverage

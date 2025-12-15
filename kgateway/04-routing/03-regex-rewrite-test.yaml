@@ -1,0 +1,78 @@
+# HTTPRoute + TrafficPolicy for testing regex path rewrite with capture groups
+# Tests: TrafficPolicy.urlRewrite.pathRegex
+#
+# NGINX equivalent:
+#   use-regex: 'true'
+#   path: /api/v1/feedback/([^/]*)/implementation/([^/]*)
+#   rewrite-target: /api-feedback-manager/feedback/$1/implementation/$2
+#
+# KGateway equivalent:
+#   HTTPRoute: path.type: RegularExpression
+#   TrafficPolicy: urlRewrite.pathRegex.pattern + .substitution
+#
+# Test URL: /api/regex/feedback/ABC123/implementation/DEF456
+# Expected: /api-feedback-manager/feedback/ABC123/implementation/DEF456
+
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: regex-rewrite-test-route
+  namespace: ingress2kgateway
+  labels:
+    app: regex-rewrite-test
+    test-type: regex-capture-validation
+spec:
+  parentRefs:
+  - name: external-gateway
+    namespace: ingress2kgateway
+    sectionName: https
+  
+  hostnames:
+  - "i2g.${DOMAIN}"
+  
+  rules:
+  # Route for regex rewrite testing
+  # Uses RegularExpression path match with capture groups
+  - matches:
+    - path:
+        type: RegularExpression
+        # Matches: /api/regex/feedback/{id1}/implementation/{id2}
+        # Capture group 1: id1 (e.g., ABC123)
+        # Capture group 2: id2 (e.g., DEF456)
+        value: "/api/regex/feedback/([^/]+)/implementation/([^/]+)"
+    
+    backendRefs:
+    - name: echo-server
+      port: 8080
+      weight: 100
+
+---
+apiVersion: gateway.kgateway.dev/v1alpha1
+kind: TrafficPolicy
+metadata:
+  name: regex-rewrite-test-policy
+  namespace: ingress2kgateway
+  labels:
+    app: regex-rewrite-test
+spec:
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: regex-rewrite-test-route
+  
+  # Regex path rewrite with capture groups
+  # Replaces NGINX: use-regex: 'true' + rewrite-target with $1, $2
+  urlRewrite:
+    pathRegex:
+      # Pattern matches the full path and captures the two IDs
+      pattern: "/api/regex/feedback/([^/]+)/implementation/([^/]+)"
+      # Substitution uses backreferences \1 and \2 (RE2 syntax)
+      # Note: NGINX uses $1, $2 but KGateway/Envoy uses \1, \2
+      substitution: "/api-feedback-manager/feedback/\\1/implementation/\\2"
+  
+  # Include external auth for this route
+  extAuth:
+    extensionRef:
+      name: ext-auth-http
+      namespace: ingress2kgateway

@@ -1,0 +1,59 @@
+# echo-server canary version for testing traffic splitting
+# Identical to stable but with different label for identification
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: echo-server-canary
+  namespace: ingress2kgateway
+  labels:
+    app: echo-server
+    version: canary
+spec:
+  ports:
+  - name: http
+    port: 8080
+    targetPort: 8080
+  selector:
+    app: echo-server
+    version: canary
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: echo-server-canary
+  namespace: ingress2kgateway
+spec:
+  replicas: 2  # Fewer replicas for canary
+  selector:
+    matchLabels:
+      app: echo-server
+      version: canary
+  template:
+    metadata:
+      labels:
+        app: echo-server
+        version: canary
+    spec:
+      containers:
+      - name: echo-server
+        image: ealen/echo-server:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8080
+        env:
+        - name: PORT
+          value: "8080"
+        - name: VERSION
+          value: "canary"  # Identifier in response
+        resources:
+          requests:
+            memory: "32Mi"
+            cpu: "25m"
+          limits:
+            memory: "64Mi"
+            cpu: "50m"
+
+# This represents the canary version of the backend service
+# Traffic splitting happens in HTTPRoute with weighted backendRefs
