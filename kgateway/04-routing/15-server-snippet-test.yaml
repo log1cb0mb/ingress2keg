@@ -1,0 +1,185 @@
+# Test 25: Server Snippet - HTTP Rejection with Custom JSON Error
+# NGINX: server-snippet + ssl-redirect: 'false'
+# KGateway: DirectResponse + HTTPRoute (per-host)
+#
+# Pattern: Reject HTTP requests with 400 JSON error (instead of redirect)
+# Use case: API endpoints that require explicit HTTPS (no auto-redirect)
+#
+# Behavior comparison:
+# - Most hosts: HTTP → 301 → HTTPS (00-http-redirect.yaml)
+# - API hosts:  HTTP → 400 JSON error (this route, more specific)
+#
+# NOTE: DirectResponse is referenced via ExtensionRef filter (NOT backendRefs)
+#       DirectResponse and HTTPRoute should be in the same namespace
+
+---
+apiVersion: gateway.kgateway.dev/v1alpha1
+kind: DirectResponse
+metadata:
+  name: http-reject-json
+  namespace: ingress2kgateway
+spec:
+  status: 400
+  body: '{"type": "https://example.com/errors/400","title": "Bad Request","status": 400, "detail": "Plain HTTP request was sent to the API. Unencrypted HTTP connections are not allowed. Please use HTTPS"}'
+
+---
+# HTTPRoute targeting HTTP listener for specific hosts
+# More specific hostname = higher priority than wildcard redirect
+# Uses ExtensionRef filter to reference DirectResponse
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: http-reject-api-hosts
+  namespace: ingress2kgateway
+spec:
+  parentRefs:
+  - name: external-gateway
+    namespace: ingress2kgateway
+    sectionName: http  # Target HTTP listener only
+  
+  # Specific API hosts that reject HTTP (instead of redirect)
+  # These take precedence over *.${DOMAIN} wildcard in 00-http-redirect.yaml
+  hostnames:
+  - "api-reject.${DOMAIN}"
+  
+  rules:
+  - filters:
+    - type: ExtensionRef
+      extensionRef:
+        group: gateway.kgateway.dev
+        kind: DirectResponse
+        name: http-reject-json
+    backendRefs: []  # No backend needed - DirectResponse handles response
+
+---
+# Test backend for HTTPS path (to verify HTTPS still works)
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: api-reject-https-route
+  namespace: ingress2kgateway
+spec:
+  parentRefs:
+  - name: external-gateway
+    namespace: ingress2kgateway
+    sectionName: https  # HTTPS works normally
+  
+  hostnames:
+  - "api-reject.${DOMAIN}"
+  
+  rules:
+  - matches:
+    - path:
+        type: PathPrefix
+        value: /
+    backendRefs:
+    - name: echo-server
+      port: 8080
+
+# ═══════════════════════════════════════════════════════════════════════════
+# NGINX EQUIVALENT:
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# nginx.ingress.kubernetes.io/ssl-redirect: 'false'
+# nginx.ingress.kubernetes.io/server-snippet: |-
+#   default_type application/json;
+#   if ( $scheme = http ){
+#     return 400 '{"type": "https://example.com/errors/400",
+#       "title": "Bad Request","status": 400, "detail": "Plain HTTP request 
+#       was sent to the API. Unencrypted HTTP connections are not allowed. 
+#       Please use HTTPS"}';
+#   }
+#
+# ═══════════════════════════════════════════════════════════════════════════
+# KEY LEARNINGS:
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# 1. DirectResponse is referenced via ExtensionRef filter, NOT backendRefs
+# 2. backendRefs should be empty [] when using DirectResponse
+# 3. DirectResponse and HTTPRoute should be in the same namespace
+#
+# ═══════════════════════════════════════════════════════════════════════════
+# ROUTE PRIORITY:
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Gateway API precedence (highest to lowest):
+# 1. Exact hostname match
+# 2. Wildcard hostname (*.domain.com)
+# 3. Longer path prefix
+#
+# This route: "api-reject.${DOMAIN}" (exact)
+# Redirect:   "*.${DOMAIN}" (wildcard)
+#
+# Result: This route wins for api-reject.* hostname
+#
+# ═══════════════════════════════════════════════════════════════════════════
+# TEST:
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# HTTP request (should get 400 with JSON):
+#   curl -v http://api-reject.${DOMAIN}/
+#   Expected: 400 Bad Request
+#   Body: {"type": "https://example.com/errors/400","title": "Bad Request",...}
+#
+# HTTPS request (should work normally):
+#   curl https://api-reject.${DOMAIN}/
+#   Expected: 200 OK from echo-server
+#
+# Compare with other hosts (should redirect):
+#   curl -v http://i2g.${DOMAIN}/
+#   Expected: 301 redirect to HTTPS (wildcard route)
+
+# ═══════════════════════════════════════════════════════════════════════════
+# ADDITIONAL PATTERN: Deprecated Endpoint Response (configuration-snippet)
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# NGINX configuration-snippet:
+#   location ~ ^/api/authenticate/login(/.*|)$ {
+#     return 401 'The old authentication endpoint is no longer supported...';
+#   }
+#
+# KGateway equivalent:
+#
+# ---
+# apiVersion: gateway.kgateway.dev/v1alpha1
+# kind: DirectResponse
+# metadata:
+#   name: deprecated-endpoint-response
+# spec:
+#   status: 401
+#   body: 'The old authentication endpoint is no longer supported. Please add an "api." prefix to your url to use the integration API instead.'
+#
+# ---
+# apiVersion: gateway.networking.k8s.io/v1
+# kind: HTTPRoute
+# metadata:
+#   name: deprecated-login-endpoint
+# spec:
+#   parentRefs:
+#   - name: external-gateway
+#     namespace: ingress2kgateway
+#   hostnames:
+#   - "app.example.com"
+#   rules:
+#   # Deprecated endpoint → 401 response
+#   - matches:
+#     - path:
+#         type: RegularExpression
+#         value: "^/api/authenticate/login(/.*)?$"
+#     filters:
+#     - type: ExtensionRef
+#       extensionRef:
+#         group: gateway.kgateway.dev
+#         kind: DirectResponse
+#         name: deprecated-endpoint-response
+#     backendRefs: []
+#   # Other paths → normal backend
+#   - matches:
+#     - path:
+#         type: PathPrefix
+#         value: /
+#     backendRefs:
+#     - name: backend-service
+#       port: 8080
+#
+# KEY: DirectResponse works with ANY path matching (prefix, regex, exact)!

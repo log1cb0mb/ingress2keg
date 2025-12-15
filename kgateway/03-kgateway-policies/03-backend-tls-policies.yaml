@@ -1,0 +1,170 @@
+# Backend TLS Policies - Testing 3 scenarios
+#
+# NGINX equivalent (2 annotations):
+#   nginx.ingress.kubernetes.io/configuration-snippet: |
+#     proxy_ssl_name "nginx-tls.ingress2kgateway.svc.cluster.local";
+#   nginx.ingress.kubernetes.io/proxy-ssl-secret: ingress2kgateway/nginx-tls-client-cert
+#
+# Note: proxy_ssl_name is an NGINX directive INSIDE configuration-snippet,
+#       not a separate annotation. proxy-ssl-secret IS a separate annotation.
+#
+# Test Scenarios:
+#   17a: Standard BackendTLSPolicy (simple TLS) - PORTABLE
+#   17b: KGateway BackendConfigPolicy (simple TLS with simpleTLS: true)
+#   17c: KGateway BackendConfigPolicy (mTLS with client cert)
+
+---
+# =============================================================================
+# Test 17a: Standard Gateway API BackendTLSPolicy (Simple TLS / One-way TLS)
+# =============================================================================
+# This is the PORTABLE option - works with any Gateway API implementation
+# Equivalent to: proxy_ssl_name "hostname"
+#
+# Status: GA (Standard Channel since v1.4.0)
+# Reference: https://gateway-api.sigs.k8s.io/api-types/backendtlspolicy/
+
+apiVersion: gateway.networking.k8s.io/v1
+kind: BackendTLSPolicy
+metadata:
+  name: nginx-tls-standard
+  namespace: ingress2kgateway
+  labels:
+    app: nginx-tls
+    test: backend-tls-17a
+spec:
+  targetRefs:
+  - group: ""
+    kind: Service
+    name: nginx-tls
+  validation:
+    # hostname is the SNI - equivalent to proxy_ssl_name
+    hostname: nginx-tls.ingress2kgateway.svc.cluster.local
+    
+    # CA certificate for validating backend's certificate
+    # Note: KGateway only supports ConfigMap (ignores kind: Secret)
+    caCertificateRefs:
+    - name: nginx-tls-ca-configmap
+      group: ""
+      kind: ConfigMap
+
+---
+# =============================================================================
+# Test 17b: KGateway BackendConfigPolicy (Simple TLS with simpleTLS: true)
+# =============================================================================
+# KGateway-specific option for one-way TLS
+# IMPORTANT: Must set simpleTLS: true to disable mTLS when secretRef has cert/key
+#
+# Reference: https://kgateway.dev/docs/envoy/main/security/backend-tls/
+
+apiVersion: gateway.kgateway.dev/v1alpha1
+kind: BackendConfigPolicy
+metadata:
+  name: nginx-tls-simple
+  namespace: ingress2kgateway
+  labels:
+    app: nginx-tls
+    test: backend-tls-17b
+spec:
+  targetRefs:
+  - group: ""
+    kind: Service
+    name: nginx-tls-simple  # Different service to avoid conflict
+  tls:
+    # SNI hostname - equivalent to proxy_ssl_name
+    sni: nginx-tls.ingress2kgateway.svc.cluster.local
+    
+    # CA certificate for validating backend's certificate
+    # KGateway can use secretRef which includes ca.crt
+    secretRef:
+      name: nginx-tls-ca-secret
+    
+    # CRITICAL: Set simpleTLS to true for one-way TLS
+    # Without this, KGateway defaults to mTLS if cert/key are in the secret
+    simpleTLS: true
+    
+    # Optional: Verify Subject Alternative Names
+    verifySubjectAltNames:
+    - nginx-tls.ingress2kgateway.svc.cluster.local
+
+---
+# =============================================================================
+# Test 17c: KGateway BackendConfigPolicy (mTLS with client certificate)
+# =============================================================================
+# KGateway-specific option for mutual TLS
+# Gateway presents client certificate to backend for authentication
+#
+# This is equivalent to:
+#   proxy_ssl_name + proxy-ssl-secret (with client cert)
+
+apiVersion: gateway.kgateway.dev/v1alpha1
+kind: BackendConfigPolicy
+metadata:
+  name: nginx-tls-mtls
+  namespace: ingress2kgateway
+  labels:
+    app: nginx-tls
+    test: backend-tls-17c
+spec:
+  targetRefs:
+  - group: ""
+    kind: Service
+    name: nginx-tls-mtls  # Different service to avoid conflict
+  tls:
+    # SNI hostname
+    sni: nginx-tls.ingress2kgateway.svc.cluster.local
+    
+    # Secret containing:
+    #   - tls.crt: Client certificate (for mTLS)
+    #   - tls.key: Client private key (for mTLS)
+    #   - ca.crt: CA certificate (for server validation)
+    secretRef:
+      name: nginx-tls-client-secret
+    
+    # simpleTLS defaults to false, so mTLS is enabled
+    # Gateway will present client cert from secretRef
+    
+    # Verify backend's Subject Alternative Names
+    verifySubjectAltNames:
+    - nginx-tls.ingress2kgateway.svc.cluster.local
+
+---
+# =============================================================================
+# Additional Services for isolated testing (to avoid policy conflicts)
+# =============================================================================
+# Since we need to test different policies on the same backend,
+# we create alias services pointing to the same pods
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-tls-simple
+  namespace: ingress2kgateway
+  labels:
+    app: nginx-tls
+    test: backend-tls-17b
+spec:
+  selector:
+    app: nginx-tls  # Same pods as nginx-tls
+  ports:
+  - port: 8443
+    targetPort: 8443
+    name: https
+    appProtocol: https
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-tls-mtls
+  namespace: ingress2kgateway
+  labels:
+    app: nginx-tls
+    test: backend-tls-17c
+spec:
+  selector:
+    app: nginx-tls  # Same pods as nginx-tls
+  ports:
+  - port: 8443
+    targetPort: 8443
+    name: https
+    appProtocol: https

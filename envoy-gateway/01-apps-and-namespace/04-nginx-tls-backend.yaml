@@ -1,0 +1,197 @@
+# NGINX Backend with TLS for Backend TLS testing
+# This backend serves HTTPS and is used to test:
+#   - Standard Gateway API BackendTLSPolicy (simple TLS)
+#   - Envoy Gateway BackendTrafficPolicy with TLS
+#
+# NGINX equivalent (configuration-snippet contains proxy_ssl_name directive):
+#   nginx.ingress.kubernetes.io/configuration-snippet: |
+#     proxy_ssl_name "nginx-tls.ingress2envoygateway.svc.cluster.local";
+#   nginx.ingress.kubernetes.io/proxy-ssl-secret: ingress2envoygateway/nginx-tls-client-cert
+---
+# Self-signed CA Certificate and Server Certificate
+# Using cert-manager for certificate management
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: selfsigned-issuer
+  namespace: ingress2envoygateway
+spec:
+  selfSigned: {}
+---
+# CA Certificate (self-signed)
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: nginx-tls-ca
+  namespace: ingress2envoygateway
+spec:
+  isCA: true
+  commonName: nginx-tls-ca
+  secretName: nginx-tls-ca-secret
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: selfsigned-issuer
+    kind: Issuer
+    group: cert-manager.io
+---
+# CA Issuer (uses the CA cert above)
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: nginx-tls-ca-issuer
+  namespace: ingress2envoygateway
+spec:
+  ca:
+    secretName: nginx-tls-ca-secret
+---
+# Server Certificate for NGINX backend
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: nginx-tls-server-cert
+  namespace: ingress2envoygateway
+spec:
+  secretName: nginx-tls-server-secret
+  duration: 2160h # 90 days
+  renewBefore: 360h # 15 days
+  commonName: nginx-tls.ingress2envoygateway.svc.cluster.local
+  dnsNames:
+    - nginx-tls
+    - nginx-tls.ingress2envoygateway
+    - nginx-tls.ingress2envoygateway.svc
+    - nginx-tls.ingress2envoygateway.svc.cluster.local
+    - nginx-passthrough.${DOMAIN}  # For TLS passthrough testing
+  issuerRef:
+    name: nginx-tls-ca-issuer
+    kind: Issuer
+    group: cert-manager.io
+---
+# Client Certificate for mTLS testing
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: nginx-tls-client-cert
+  namespace: ingress2envoygateway
+spec:
+  secretName: nginx-tls-client-secret
+  duration: 2160h # 90 days
+  renewBefore: 360h # 15 days
+  commonName: gateway-client
+  usages:
+    - client auth
+  issuerRef:
+    name: nginx-tls-ca-issuer
+    kind: Issuer
+    group: cert-manager.io
+---
+# ConfigMap for NGINX TLS configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nginx-tls-config
+  namespace: ingress2envoygateway
+data:
+  nginx.conf: |
+    events {
+        worker_connections 1024;
+    }
+    http {
+        server {
+            listen 8443 ssl;
+            server_name nginx-tls.ingress2envoygateway.svc.cluster.local nginx-passthrough.${DOMAIN};
+            
+            ssl_certificate /etc/nginx/ssl/tls.crt;
+            ssl_certificate_key /etc/nginx/ssl/tls.key;
+            
+            # For mTLS testing - enable optional client cert verification
+            # The CA cert is the same as our self-signed CA that issued client certs
+            ssl_client_certificate /etc/nginx/ssl/ca.crt;
+            ssl_verify_client optional;  # optional = accept but don't require
+            
+            ssl_protocols TLSv1.2 TLSv1.3;
+            ssl_ciphers HIGH:!aNULL:!MD5;
+            
+            location / {
+                default_type application/json;
+                return 200 '{"status":"ok","server":"nginx-tls","tls":"enabled","hostname":"$hostname","uri":"$uri","ssl_client_verify":"$ssl_client_verify"}';
+            }
+            
+            location /health {
+                return 200 'healthy';
+            }
+        }
+    }
+---
+# NGINX Deployment with TLS
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-tls
+  namespace: ingress2envoygateway
+  labels:
+    app: nginx-tls
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nginx-tls
+  template:
+    metadata:
+      labels:
+        app: nginx-tls
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:1.25-alpine
+        ports:
+        - containerPort: 8443
+          name: https
+        volumeMounts:
+        - name: nginx-config
+          mountPath: /etc/nginx/nginx.conf
+          subPath: nginx.conf
+        - name: tls-certs
+          mountPath: /etc/nginx/ssl
+          readOnly: true
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8443
+            scheme: HTTPS
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      volumes:
+      - name: nginx-config
+        configMap:
+          name: nginx-tls-config
+      - name: tls-certs
+        secret:
+          secretName: nginx-tls-server-secret
+---
+# Service for NGINX TLS backend
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-tls
+  namespace: ingress2envoygateway
+  labels:
+    app: nginx-tls
+spec:
+  selector:
+    app: nginx-tls
+  ports:
+  - port: 8443
+    targetPort: 8443
+    name: https
+    appProtocol: https
+# NOTE: ConfigMap for BackendTLSPolicy CA certificate is created automatically
+# by deploy.sh after cert-manager issues the CA certificate.
+# This is because BackendTLSPolicy requires CA in ConfigMap format,
+# but cert-manager creates it as a Secret.
+#
+# The deploy.sh script will:
+#   1. Wait for cert-manager to create nginx-tls-ca-secret
+#   2. Extract ca.crt from the secret
+#   3. Create nginx-tls-ca-configmap with the CA certificate

@@ -1,0 +1,78 @@
+# # ListenerPolicy - HTTP Connection Manager Configuration
+# # ============================================================================
+# # STATUS: FOR REVIEW - Not required for OAuth2 (sectionName: https was the fix)
+# # ============================================================================
+# #
+# # This policy configures Envoy's HTTP Connection Manager settings.
+# # Useful for:
+# #   - Preserving client IP behind load balancers
+# #   - Configuring XFF (X-Forwarded-For) header trust
+# #   - Access logging configuration
+# #
+# # ============================================================================
+# # WHEN TO USE
+# # ============================================================================
+# #
+# # 1. Behind Azure Internal LB with externalTrafficPolicy: Local
+# #    - The GatewayParameters already sets externalTrafficPolicy: Local
+# #    - This preserves source IP at the Service level
+# #    - ListenerPolicy can further configure Envoy's HCM
+# #
+# # 2. Client IP Detection:
+# #    - useRemoteAddress: true (default) - Use connection's remote address
+# #    - useRemoteAddress: false - Use X-Forwarded-For header
+# #
+# # 3. Multiple Proxy Hops:
+# #    - xffNumTrustedHops: N - Trust N hops from right side of XFF header
+# #    - Example: Client → CDN → LB → Envoy (xffNumTrustedHops: 2)
+# #
+# # ============================================================================
+# # REFERENCE
+# # ============================================================================
+# # Envoy docs: https://www.envoyproxy.io/docs/envoy/latest/api-v3/extensions/filters/network/http_connection_manager/v3/http_connection_manager.proto
+# # KGateway ListenerPolicy CRD: gateway.kgateway.dev/v1alpha1/ListenerPolicy
+# #
+# # ============================================================================
+# # EXAMPLE SETUP
+# # ============================================================================
+# # - Azure Internal LB with externalTrafficPolicy: Local (via GatewayParameters)
+# # - Single hop: Client → Azure ILB → Envoy
+# # - Source IP preserved at network level
+# #
+# # This ListenerPolicy is OPTIONAL but documented for future reference.
+# # ============================================================================
+
+# ---
+# apiVersion: gateway.kgateway.dev/v1alpha1
+# kind: ListenerPolicy
+# metadata:
+#   name: gateway-listener-policy
+#   namespace: ingress2kgateway
+#   labels:
+#     app: kgateway
+#     purpose: client-ip-preservation
+#   annotations:
+#     description: "Configures XFF handling for client IP preservation"
+# spec:
+#   targetRefs:
+#   - group: gateway.networking.k8s.io
+#     kind: Gateway
+#     name: external-gateway
+#   default:
+#     httpSettings:
+#       # ========================================================================
+#       # X-Forwarded-For Configuration
+#       # ========================================================================
+      
+#       # xffNumTrustedHops: Number of proxy hops to trust from right side of XFF
+#       # Set to 1 for single LB in front of Envoy
+#       # Envoy docs: determines which hops in XFF are trusted to be legitimate
+#       xffNumTrustedHops: 1
+      
+#       # useRemoteAddress: How Envoy determines the "client" address
+#       # - true (default): Use TCP connection's remote address (works with externalTrafficPolicy: Local)
+#       # - false: Use X-Forwarded-For header (use when behind proxy that sets XFF)
+#       #
+#       # With Azure ILB + externalTrafficPolicy: Local, the remote address IS the real client IP
+#       # So useRemoteAddress: true is correct for our setup
+#       useRemoteAddress: true

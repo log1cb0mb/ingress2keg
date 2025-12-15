@@ -1,0 +1,89 @@
+# echo-server - Simple echo server that returns request details
+# - Shows all request headers
+# - Shows request method, path, query params
+# - Supports large payload uploads
+# - Good for testing transformations and rewrites
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: echo-server
+  namespace: ingress2kgateway
+  labels:
+    app: echo-server
+    version: stable
+spec:
+  ports:
+  - name: http
+    port: 8080
+    targetPort: 8080
+  selector:
+    app: echo-server
+    version: stable
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: echo-server
+  namespace: ingress2kgateway
+spec:
+  replicas: 3  # Multiple replicas to test session affinity
+  selector:
+    matchLabels:
+      app: echo-server
+      version: stable
+  template:
+    metadata:
+      labels:
+        app: echo-server
+        version: stable
+    spec:
+      containers:
+      - name: echo-server
+        image: ealen/echo-server:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8080
+        env:
+        - name: PORT
+          value: "8080"
+        - name: VERSION
+          value: "stable"  # Identifier in response
+        resources:
+          requests:
+            memory: "32Mi"
+            cpu: "25m"
+          limits:
+            memory: "64Mi"
+            cpu: "50m"
+
+# echo-server features:
+# Returns JSON with:
+# - request.method
+# - request.headers (all headers)
+# - request.path
+# - request.query
+# - request.body
+# - host.hostname
+# - host.ip
+
+---
+# echo-server-lb - Dedicated service for load-balancing tests (Test 24)
+# Same pods as echo-server, separate service to avoid policy conflicts
+apiVersion: v1
+kind: Service
+metadata:
+  name: echo-server-lb
+  namespace: ingress2kgateway
+  labels:
+    app: echo-server
+    purpose: load-balance-test
+spec:
+  ports:
+  - name: http
+    port: 8080
+    targetPort: 8080
+  selector:
+    app: echo-server
+    version: stable

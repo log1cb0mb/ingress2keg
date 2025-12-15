@@ -1,0 +1,20 @@
+# Environment configuration (contains user-specific values)
+config.env
+
+# Editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.bak
+
+# Test artifacts
+/tmp/

@@ -1,0 +1,106 @@
+# Gateway for KGateway implementation
+# Domain: ${DOMAIN}
+# TLS: Certificate managed by cert-manager (see 01-certificate.yaml)
+
+---
+# GatewayParameters - configures the Gateway proxy Service
+# Docs: https://kgateway.dev/docs/main/reference/api/
+#
+# All implementation-specific config consolidated here for consistency:
+#   - externalTrafficPolicy: Local (preserve client source IP)
+#   - Service annotations (Azure internal LB)
+apiVersion: gateway.kgateway.dev/v1alpha1
+kind: GatewayParameters
+metadata:
+  name: preserve-source-ip
+  namespace: ingress2kgateway
+spec:
+  kube:
+    service:
+      # Preserve client source IP (not NAT'd by Azure LB)
+      # Required for IP-based RBAC/whitelist-source-range
+      externalTrafficPolicy: Local
+      
+      # Azure internal LoadBalancer annotation
+      # NGINX equivalent: service.beta.kubernetes.io/azure-load-balancer-internal: "true"
+      # This could also be set on Gateway.infrastructure.annotations (portable)
+      # but we consolidate all implementation-specific config here for consistency
+      extraAnnotations:
+        service.beta.kubernetes.io/azure-load-balancer-internal: "true"
+
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: external-gateway
+  namespace: ingress2kgateway
+  # Note: cert-manager annotation commented out - using explicit Certificate resource instead
+  # This approach requires only cert-manager with ClusterIssuer, not Gateway API integration
+  # annotations:
+  #   cert-manager.io/cluster-issuer: ${CLUSTER_ISSUER}
+spec:
+  gatewayClassName: kgateway
+  
+  # Infrastructure configuration
+  # Standard Gateway API field - portable across implementations
+  #
+  # Note: Service annotations (e.g., Azure internal LB) moved to GatewayParameters
+  # for consistency - all implementation-specific config in one place.
+  #
+  # Portable option (commented for reference):
+  #   infrastructure:
+  #     annotations:
+  #       service.beta.kubernetes.io/azure-load-balancer-internal: "true"
+  #
+  infrastructure:
+    # Reference GatewayParameters for all KGateway-specific settings
+    # (externalTrafficPolicy, service annotations, etc.)
+    parametersRef:
+      group: gateway.kgateway.dev
+      kind: GatewayParameters
+      name: preserve-source-ip
+  listeners:
+  # HTTP listener - for redirect to HTTPS
+  - name: http
+    protocol: HTTP
+    port: 80
+    allowedRoutes:
+      namespaces:
+        from: All
+  
+  # HTTPS listener - main traffic (TLS terminated at gateway)
+  - name: https
+    protocol: HTTPS
+    port: 443
+    hostname: "*.${DOMAIN}"
+    tls:
+      mode: Terminate
+      certificateRefs:
+      - name: gateway-tls-cert
+        kind: Secret
+    allowedRoutes:
+      namespaces:
+        from: All
+  
+  # TLS Passthrough listener - encrypted traffic passed directly to backend
+  # NGINX equivalent: nginx.ingress.kubernetes.io/ssl-passthrough: "true"
+  # Reference: https://gateway-api.sigs.k8s.io/guides/tls/
+  # Reference: https://kgateway.dev/docs/envoy/latest/setup/listeners/tls-passthrough/
+  #
+  # Same port as HTTPS (443) is supported - gateway uses SNI to distinguish:
+  #   - SNI matching specific hostname → TLS Passthrough (this listener)
+  #   - SNI matching wildcard → HTTPS Terminate (https listener)
+  - name: tls-passthrough
+    protocol: TLS
+    port: 443  # Same port as HTTPS - SNI-based routing distinguishes listeners
+    hostname: "nginx-passthrough.${DOMAIN}"
+    tls:
+      mode: Passthrough  # Key setting: traffic NOT terminated at gateway
+    allowedRoutes:
+      namespaces:
+        from: All
+      kinds:
+      - kind: TLSRoute  # Only TLSRoute can attach to Passthrough listeners
+
+# Note: Certificate resource (01-certificate.yaml) creates gateway-tls-cert Secret
+# HTTP listener allows redirect route, HTTPS listener serves actual traffic

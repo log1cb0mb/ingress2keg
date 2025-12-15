@@ -1,0 +1,121 @@
+# OAuth2/OIDC - Native KGateway Support
+# ============================================================================
+# NGINX Equivalent:
+#   nginx.ingress.kubernetes.io/auth-signin: https://$host/oauth2/start?rd=$escaped_request_uri
+#   nginx.ingress.kubernetes.io/auth-url: https://$host/oauth2/auth
+#
+# KGateway Native OAuth2:
+#   - No oauth2-proxy deployment needed
+#   - Envoy handles OAuth2/OIDC flow directly
+#   - Auto-redirects unauthenticated users to OIDC provider
+#   - Forwards access token to backend
+#
+# ============================================================================
+# 
+# Prerequisites:
+#   1. Configure OIDC provider in config.env:
+#      OIDC_ISSUER_URL, OIDC_CLIENT_ID, OIDC_PROVIDER_HOST
+#   2. Create secret 'oidc-client-secret' with key 'client-secret':
+#      kubectl create secret generic oidc-client-secret \
+#        --from-literal=client-secret=<YOUR_CLIENT_SECRET> \
+#        -n ingress2kgateway
+#   3. Register redirect URI with your OIDC provider:
+#      https://oauth.${DOMAIN}/oauth2/callback
+#
+# Supported Providers:
+#   - Azure AD: issuer = https://login.microsoftonline.com/<tenant-id>/v2.0
+#   - Google: issuer = https://accounts.google.com
+#   - Okta: issuer = https://<org>.okta.com
+#   - Keycloak: issuer = https://<host>/realms/<realm>
+#   - Auth0: issuer = https://<tenant>.<region>.auth0.com
+#
+# Security:
+#   - Pair with CSRF policy in TrafficPolicy to prevent cross-site request forgery
+#   - See 04-routing/12-oauth2-test.yaml for CSRF configuration
+#
+# ============================================================================
+
+---
+# GatewayExtension for OAuth2/OIDC
+apiVersion: gateway.kgateway.dev/v1alpha1
+kind: GatewayExtension
+metadata:
+  name: oauth2-oidc
+  namespace: ingress2kgateway
+  labels:
+    app: oauth2
+spec:
+  oauth2:
+    # Reference to KGateway Backend for OIDC provider
+    backendRef:
+      kind: Backend
+      group: gateway.kgateway.dev
+      name: oidc-provider
+    
+    # OIDC Discovery URL - auto-discovers endpoints
+    # Configured via OIDC_ISSUER_URL in config.env
+    # Examples:
+    #   Azure AD v2: https://login.microsoftonline.com/<tenant-id>/v2.0
+    #   Google: https://accounts.google.com
+    #   Okta: https://<org>.okta.com
+    issuerURI: "${OIDC_ISSUER_URL}"
+    
+    # Client credentials
+    credentials:
+      # Configured via OIDC_CLIENT_ID in config.env
+      clientID: "${OIDC_CLIENT_ID}"
+      clientSecretRef:
+        name: oidc-client-secret  # Secret with key 'client-secret'
+    
+    # Redirect URI - where provider redirects after login
+    # Must match registered redirect URI in your OIDC provider
+    redirectURI: "https://oauth.${DOMAIN}/oauth2/callback"
+    
+    # OAuth2 scopes - openid required for OIDC
+    scopes:
+    - "openid"
+    - "profile"
+    - "email"
+    
+    # Forward access token to backend
+    # Sets Authorization header and BearerToken cookie
+    forwardAccessToken: true
+    
+    # Logout path - hitting this clears session
+    logoutPath: "/logout"
+
+---
+# KGateway Backend for OIDC Provider
+# Configured via OIDC_PROVIDER_HOST in config.env
+apiVersion: gateway.kgateway.dev/v1alpha1
+kind: Backend
+metadata:
+  name: oidc-provider
+  namespace: ingress2kgateway
+  labels:
+    app: oidc-provider
+spec:
+  type: Static
+  static:
+    hosts:
+    - host: ${OIDC_PROVIDER_HOST}  # e.g., login.microsoftonline.com, accounts.google.com
+      port: 443
+
+---
+# BackendTLSPolicy to validate OIDC provider's TLS certificate
+# Uses system CA certificates (wellKnownCACertificates: System)
+apiVersion: gateway.networking.k8s.io/v1
+kind: BackendTLSPolicy
+metadata:
+  name: oidc-provider-tls
+  namespace: ingress2kgateway
+  labels:
+    app: oidc-provider
+spec:
+  targetRefs:
+  - group: gateway.kgateway.dev
+    kind: Backend
+    name: oidc-provider
+  validation:
+    hostname: ${OIDC_PROVIDER_HOST}
+    wellKnownCACertificates: System

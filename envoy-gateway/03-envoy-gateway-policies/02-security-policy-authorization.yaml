@@ -1,0 +1,48 @@
+# SecurityPolicy for IP Whitelisting (Authorization)
+# Ref: https://gateway.envoyproxy.io/docs/tasks/security/authorization/
+#
+# NGINX equivalent:
+#   nginx.ingress.kubernetes.io/whitelist-source-range: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+#
+# Envoy Gateway uses CIDR notation directly (simpler than KGateway CEL expressions!)
+
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: SecurityPolicy
+metadata:
+  name: ip-whitelist-policy
+  namespace: ingress2envoygateway
+  labels:
+    test: ip-whitelist
+spec:
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: ip-whitelist-route
+  
+  authorization:
+    # Default deny - only allow matching rules
+    defaultAction: Deny
+    
+    rules:
+    - name: allow-private-networks
+      action: Allow
+      principal:
+        # RFC 1918 Private IP Ranges - for reusable testing
+        # Direct CIDR notation - much simpler than KGateway CEL!
+        clientCIDRs:
+        - "10.0.0.0/8"       # Class A private (Azure VNets, Kubernetes pods)
+        - "172.16.0.0/12"    # Class B private (172.16.x.x - 172.31.x.x)
+        - "192.168.0.0/16"   # Class C private (home/office networks)
+        - "127.0.0.0/8"      # Localhost (for local testing scenarios)
+
+# Envoy Gateway Advantage:
+# - Direct CIDR notation (no CEL expressions needed)
+# - Cleaner and more readable than KGateway RBAC
+#
+# Test 3 Validation:
+# 1. Request from whitelisted IP → 200 OK
+# 2. Request from non-whitelisted IP → 403 Forbidden
+#
+# ⚠️ IMPORTANT: ClientTrafficPolicy must be configured for client IP detection
+# See: 02-gateway/03-client-traffic-policy.yaml

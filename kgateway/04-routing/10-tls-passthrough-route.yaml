@@ -1,0 +1,81 @@
+# TLS Passthrough Test
+# 
+# This tests the NGINX annotation: nginx.ingress.kubernetes.io/ssl-passthrough: "true"
+# 
+# NGINX Ingress equivalent:
+#   apiVersion: networking.k8s.io/v1
+#   kind: Ingress
+#   metadata:
+#     annotations:
+#       nginx.ingress.kubernetes.io/ssl-passthrough: "true"
+#   spec:
+#     rules:
+#     - host: nginx-passthrough.${DOMAIN}
+#       http:
+#         paths:
+#         - path: /
+#           pathType: Prefix
+#           backend:
+#             service:
+#               name: nginx-tls
+#               port:
+#                 number: 8443
+#
+# Gateway API equivalent:
+#   - Gateway listener with protocol: TLS and tls.mode: Passthrough
+#   - TLSRoute (instead of HTTPRoute)
+#
+# Key differences:
+#   - Traffic is NOT terminated at the gateway
+#   - Backend must handle TLS directly
+#   - Uses TLSRoute (not HTTPRoute)
+#   - Backend service must NOT have BackendTLSPolicy attached (would cause re-encryption)
+#   - This is STANDARD Gateway API (not KGateway-specific)
+#
+# Same Port as HTTPS (443):
+#   - Both HTTPS and TLS Passthrough listeners share port 443
+#   - Gateway uses SNI (Server Name Indication) to route:
+#     - SNI = nginx-passthrough.* → TLS Passthrough (this route)
+#     - SNI = *.${DOMAIN} (wildcard) → HTTPS Terminate
+#   - No port-forward hack needed - direct access via port 443
+#
+# Reference: https://gateway-api.sigs.k8s.io/guides/tls/
+# Reference: https://kgateway.dev/docs/envoy/latest/setup/listeners/tls-passthrough/
+---
+# Separate Service for TLS Passthrough (no BackendTLSPolicy attached)
+# This ensures Envoy passes traffic as raw TCP without TLS re-encryption
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-tls-passthrough
+  namespace: ingress2kgateway
+  labels:
+    app: nginx-tls
+    test: tls-passthrough
+spec:
+  selector:
+    app: nginx-tls  # Same pods as nginx-tls
+  ports:
+  - port: 8443
+    targetPort: 8443
+    name: https
+    # NOTE: No appProtocol - this is important for passthrough
+---
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: TLSRoute
+metadata:
+  name: nginx-tls-passthrough
+  namespace: ingress2kgateway
+  labels:
+    test: tls-passthrough
+spec:
+  parentRefs:
+  - name: external-gateway
+    namespace: ingress2kgateway
+    sectionName: tls-passthrough  # Reference the TLS passthrough listener
+  hostnames:
+  - "nginx-passthrough.${DOMAIN}"
+  rules:
+  - backendRefs:
+    - name: nginx-tls-passthrough  # Use the new service without TLS policies
+      port: 8443

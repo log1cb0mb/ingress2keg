@@ -1,0 +1,59 @@
+# GatewayExtension for External Authentication
+# Ref: https://kgateway.dev/docs/latest/security/external-auth/
+#
+# ============================================================================
+# PRODUCTION PATTERN
+# ============================================================================
+# NGINX:
+#   nginx.ingress.kubernetes.io/auth-url: https://host/api/accounts/iip/tokenExchange
+#   nginx.ingress.kubernetes.io/auth-response-headers: authorization
+#
+# KGateway:
+#   httpService.backendRef + pathPrefix → auth-url
+#   authorizationResponse.headersToBackend → auth-response-headers
+# ============================================================================
+#
+# Test auth service: Node.js HTTP ext-auth (see 01-apps-and-namespace/02-ext-authz.yaml)
+#   Valid tokens: token1→user1, token2→user2, token3→user3
+#   Returns: x-current-user header on success
+# ============================================================================
+
+---
+apiVersion: gateway.kgateway.dev/v1alpha1
+kind: GatewayExtension
+metadata:
+  name: ext-auth-http
+  namespace: ingress2kgateway
+  labels:
+    app: ext-authz
+    auth-type: http
+spec:
+  extAuth:
+    httpService:
+      backendRef:
+        name: ext-authz
+        port: 9002
+      # pathPrefix maps to the path portion of NGINX auth-url
+      # NGINX: auth-url: https://host/api/accounts/iip/tokenExchange
+      # KGateway: pathPrefix: "/api/accounts/iip/tokenExchange"
+      # 
+      # Our test auth doesn't require a specific path, so "/" for testing
+      pathPrefix: "/"
+      requestTimeout: 5s
+      # authorizationResponse maps to NGINX auth-response-headers
+      # NGINX: auth-response-headers: authorization
+      # KGateway: headersToBackend: ["authorization", "x-current-user", ...]
+      #
+      # Our test auth returns x-current-user header on success
+      # In production, auth service would return authorization header with JWT
+      authorizationResponse:
+        headersToBackend:
+          - "authorization"     # Production: JWT token from auth service
+          - "x-current-user"    # Test: our auth service returns this
+    # Forward headers from client to auth service
+    headersToForward:
+      - "cookie"
+      - "authorization"
+      - "x-forwarded-for"
+    failOpen: false
+    statusOnError: 403

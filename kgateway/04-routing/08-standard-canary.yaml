@@ -1,0 +1,136 @@
+# Standard Gateway API Canary Deployment Test
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Purpose: Demonstrate PORTABLE canary/traffic splitting using standard Gateway API
+#          (works with any Gateway API implementation, not just KGateway)
+#
+# Comparison:
+#   - THIS FILE: Standard Gateway API (HTTPRoute.backendRefs[].weight)
+#   - 01-comprehensive-test-httproute.yaml: Same mechanism (already standard!)
+#
+# NGINX Equivalent:
+#   # Requires TWO separate Ingress resources in NGINX:
+#   # 1. Main ingress (no canary annotations)
+#   # 2. Canary ingress with:
+#   nginx.ingress.kubernetes.io/canary: "true"
+#   nginx.ingress.kubernetes.io/canary-weight: "20"
+#
+# Gateway API: Single HTTPRoute with weighted backendRefs (much simpler!)
+#
+# ═══════════════════════════════════════════════════════════════════════════
+
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: standard-canary-route
+  namespace: ingress2kgateway
+  labels:
+    app: standard-canary-test
+    test-type: gateway-api-standard
+    portability: upstream-compatible
+spec:
+  parentRefs:
+  - name: external-gateway
+    namespace: ingress2kgateway
+    sectionName: https
+  
+  hostnames:
+  - "i2g.${DOMAIN}"
+  
+  rules:
+  # ═══════════════════════════════════════════════════════════════════════
+  # Test Route: Standard Gateway API Canary Deployment
+  # ═══════════════════════════════════════════════════════════════════════
+  #
+  # Traffic Distribution:
+  #   - 90% → echo-server (stable)
+  #   - 10% → echo-server-canary (canary)
+  #
+  # ═══════════════════════════════════════════════════════════════════════
+  - matches:
+    - path:
+        type: PathPrefix
+        value: "/api/standard/canary/"
+    
+    backendRefs:
+    # Stable version - 90% traffic
+    - name: echo-server
+      port: 8080
+      weight: 90
+    
+    # Canary version - 10% traffic
+    - name: echo-server-canary
+      port: 8080
+      weight: 10
+
+# ═══════════════════════════════════════════════════════════════════════════
+# COMPARISON: NGINX vs Gateway API Canary
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# ┌─────────────────────────────────────────────────────────────────────────┐
+# │ NGINX Ingress (Complex - requires 2 resources)                          │
+# │ ────────────────────────────────────────────────────────────────────────│
+# │                                                                         │
+# │ # 1. Main Ingress                                                       │
+# │ apiVersion: networking.k8s.io/v1                                        │
+# │ kind: Ingress                                                           │
+# │ metadata:                                                               │
+# │   name: my-app                                                          │
+# │ spec:                                                                   │
+# │   rules:                                                                │
+# │   - host: example.com                                                   │
+# │     http:                                                               │
+# │       paths:                                                            │
+# │       - path: /api                                                      │
+# │         backend:                                                        │
+# │           service:                                                      │
+# │             name: my-app-stable                                         │
+# │             port: 80                                                    │
+# │                                                                         │
+# │ # 2. Canary Ingress (separate resource!)                                │
+# │ apiVersion: networking.k8s.io/v1                                        │
+# │ kind: Ingress                                                           │
+# │ metadata:                                                               │
+# │   name: my-app-canary                                                   │
+# │   annotations:                                                          │
+# │     nginx.ingress.kubernetes.io/canary: "true"                          │
+# │     nginx.ingress.kubernetes.io/canary-weight: "10"                     │
+# │ spec:                                                                   │
+# │   rules:                                                                │
+# │   - host: example.com                                                   │
+# │     http:                                                               │
+# │       paths:                                                            │
+# │       - path: /api                                                      │
+# │         backend:                                                        │
+# │           service:                                                      │
+# │             name: my-app-canary                                         │
+# │             port: 80                                                    │
+# └─────────────────────────────────────────────────────────────────────────┘
+#
+# ┌─────────────────────────────────────────────────────────────────────────┐
+# │ Standard Gateway API (Simple - single resource)                         │
+# │ ────────────────────────────────────────────────────────────────────────│
+# │                                                                         │
+# │ apiVersion: gateway.networking.k8s.io/v1                                │
+# │ kind: HTTPRoute                                                         │
+# │ spec:                                                                   │
+# │   rules:                                                                │
+# │   - backendRefs:                                                        │
+# │     - name: my-app-stable                                               │
+# │       weight: 90                                                        │
+# │     - name: my-app-canary                                               │
+# │       weight: 10                                                        │
+# └─────────────────────────────────────────────────────────────────────────┘
+#
+# ═══════════════════════════════════════════════════════════════════════════
+# ADVANTAGES of Gateway API Canary
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# 1. Single resource instead of two
+# 2. Atomic weight changes (no need to update two resources)
+# 3. Support for >2 versions (A/B/C testing)
+# 4. Clearer traffic distribution semantics
+# 5. Portable across all Gateway API implementations
+#
+# ═══════════════════════════════════════════════════════════════════════════

@@ -1,0 +1,129 @@
+# Standard Gateway API Header Modifier Test
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Purpose: Demonstrate PORTABLE header modification using standard Gateway API
+#          (works with any Gateway API implementation, not just Envoy Gateway)
+#
+# Comparison:
+#   - THIS FILE: Standard Gateway API (HTTPRoute.RequestHeaderModifier/ResponseHeaderModifier)
+#   - Could also use ClientTrafficPolicy.headers for Envoy Gateway-specific approach
+#
+# NGINX Equivalent:
+#   configuration-snippet: |
+#     more_set_input_headers 'Accept: text/plain';
+#     more_set_headers 'X-Cluster-Name: envoy-gateway-test';
+#
+# Reference: https://gateway-api.sigs.k8s.io/guides/http-header-modifier/
+#
+# ═══════════════════════════════════════════════════════════════════════════
+
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: standard-header-modifier-route
+  namespace: ingress2envoygateway
+  labels:
+    app: standard-header-test
+    test-type: gateway-api-standard
+    portability: upstream-compatible
+spec:
+  parentRefs:
+  - name: external-gateway
+    namespace: ingress2envoygateway
+    sectionName: https
+  
+  hostnames:
+  - "eg.${DOMAIN}"
+  
+  rules:
+  # ═══════════════════════════════════════════════════════════════════════
+  # Test Route: Standard Gateway API Header Modification
+  # ═══════════════════════════════════════════════════════════════════════
+  #
+  # Request Headers Modified:
+  #   - Set Accept: text/plain (overwrites any existing value)
+  #   - Add X-Gateway-Version: standard-api
+  #
+  # Response Headers Modified:
+  #   - Add X-Cluster-Name: envoy-gateway-test
+  #   - Add X-Gateway-Type: standard
+  #
+  # ═══════════════════════════════════════════════════════════════════════
+  - matches:
+    - path:
+        type: PathPrefix
+        value: "/api/standard/headers/"
+    
+    filters:
+    # Request Header Modification (Standard Gateway API)
+    # Replaces: NGINX configuration-snippet with more_set_input_headers
+    - type: RequestHeaderModifier
+      requestHeaderModifier:
+        set:
+        - name: Accept
+          value: "text/plain"
+        add:
+        - name: X-Gateway-Version
+          value: "standard-api"
+    
+    # Response Header Modification (Standard Gateway API)
+    # Replaces: NGINX configuration-snippet with more_set_headers
+    - type: ResponseHeaderModifier
+      responseHeaderModifier:
+        add:
+        - name: X-Cluster-Name
+          value: "envoy-gateway-test-standard"
+        - name: X-Gateway-Type
+          value: "standard"
+    
+    backendRefs:
+    - name: echo-server
+      port: 8080
+
+# ═══════════════════════════════════════════════════════════════════════════
+# COMPARISON: Two Ways to Modify Headers
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# ┌─────────────────────────────────────────────────────────────────────────┐
+# │ METHOD 1: Standard Gateway API (THIS FILE)                              │
+# │ ────────────────────────────────────────────────────────────────────────│
+# │ API: gateway.networking.k8s.io/v1 HTTPRoute                             │
+# │ Portability: ✅ Works with ANY Gateway API implementation               │
+# │                                                                         │
+# │ Filters:                                                                │
+# │   - RequestHeaderModifier: add, set, remove request headers             │
+# │   - ResponseHeaderModifier: add, set, remove response headers           │
+# │                                                                         │
+# │ Reference: https://gateway-api.sigs.k8s.io/guides/http-header-modifier/ │
+# └─────────────────────────────────────────────────────────────────────────┘
+#
+# ┌─────────────────────────────────────────────────────────────────────────┐
+# │ METHOD 2: Envoy Gateway ClientTrafficPolicy                             │
+# │ ────────────────────────────────────────────────────────────────────────│
+# │ API: gateway.envoyproxy.io/v1alpha1 ClientTrafficPolicy                 │
+# │ Portability: ❌ Envoy Gateway-specific (vendor lock-in)                 │
+# │                                                                         │
+# │ Fields:                                                                 │
+# │   - headers.withUnderscoresAction: Allow/Reject headers with underscores│
+# │   - headers.preserveXRequestId: Preserve X-Request-Id header            │
+# │   - headers.xForwardedClientCert: Configure XFCC header                 │
+# │                                                                         │
+# │ Use when: Need advanced header behaviors not in standard API            │
+# └─────────────────────────────────────────────────────────────────────────┘
+#
+# ═══════════════════════════════════════════════════════════════════════════
+# RECOMMENDATION
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Use Standard Gateway API when:
+#   • Header modification is the only feature needed for this route
+#   • Portability across implementations is important
+#   • Minimizing vendor-specific dependencies
+#
+# Use Envoy Gateway policies when:
+#   • Need advanced header behaviors (underscores, XFCC, etc.)
+#   • Route already uses other Envoy Gateway policies
+#   • Committed to Envoy Gateway as the implementation
+#
+# ═══════════════════════════════════════════════════════════════════════════

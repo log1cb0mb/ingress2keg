@@ -1,0 +1,67 @@
+# SecurityPolicy for External Authentication
+# Ref: https://gateway.envoyproxy.io/docs/tasks/security/ext-auth/
+#
+# ============================================================================
+# PRODUCTION PATTERN
+# ============================================================================
+# NGINX:
+#   nginx.ingress.kubernetes.io/auth-url: https://host/api/accounts/iip/tokenExchange
+#   nginx.ingress.kubernetes.io/auth-response-headers: authorization
+#
+# Envoy Gateway:
+#   extAuth.http.backendRef → auth-url (host/port)
+#   extAuth.http.headersToBackend → auth-response-headers
+# ============================================================================
+#
+# Test auth service: Node.js HTTP ext-auth (see 01-apps-and-namespace/02-ext-authz.yaml)
+#   Valid tokens: token1→user1, token2→user2, token3→user3
+#   Returns: x-current-user header on success
+# ============================================================================
+
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: SecurityPolicy
+metadata:
+  name: ext-auth-policy
+  namespace: ingress2envoygateway
+  labels:
+    app: ext-authz
+    auth-type: http
+spec:
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: extauth-test-route
+  
+  extAuth:
+    # Headers to forward from client to auth service (at extAuth level, not http level)
+    headersToExtAuth:
+      - cookie
+      - authorization
+      - x-forwarded-for
+    # Fail closed - deny request if auth service fails
+    failOpen: false
+    http:
+      backendRef:
+        name: ext-authz
+        port: 9002
+      # Path prefix for auth requests
+      # NGINX: auth-url: https://host/api/accounts/iip/tokenExchange
+      # Our test auth doesn't require a specific path, so "/" for testing
+      path: "/"
+      # Headers from auth response to forward to backend
+      # NGINX: auth-response-headers: authorization
+      headersToBackend:
+        - authorization     # Production: JWT token from auth service
+        - x-current-user    # Test: our auth service returns this
+
+# NGINX Equivalent Mapping:
+#   auth-url → extAuth.http.backendRef + path
+#   auth-response-headers → extAuth.http.headersToBackend
+#   
+# How it works:
+# 1. Client sends request with Authorization: Bearer token1
+# 2. Envoy extracts headers (authorization) and sends to ext-authz:9002/
+# 3. ext-authz validates token, returns 200 + x-current-user header
+# 4. Envoy forwards request to backend with x-current-user header
+# 5. Backend receives both original headers + auth-added headers

@@ -1,0 +1,263 @@
+# # ============================================================================
+# # SUPPLEMENTARY REFERENCE: Gateway-Level Authentication
+# # ============================================================================
+# #
+# # This file demonstrates an ALTERNATIVE approach to authentication where
+# # the SecurityPolicy is attached to the Gateway instead of individual HTTPRoutes.
+# #
+# # WHY THIS FILE EXISTS:
+# #   - Primary test (00-security-policy-extauth.yaml) attaches SecurityPolicy → HTTPRoute
+# #   - This supplementary reference shows SecurityPolicy → Gateway pattern
+# #   - Useful when you want auth enforced globally on ALL routes for a Gateway
+# #
+# # WHEN TO USE GATEWAY-LEVEL AUTH:
+# #   ✅ All routes on the Gateway require the same authentication
+# #   ✅ Simpler configuration - single policy protects everything
+# #   ✅ Dedicated Gateway per application/team with uniform auth requirements
+# #   ✅ Matches NGINX ConfigMap global-auth-url pattern
+# #
+# # WHEN TO USE HTTPROUTE-LEVEL AUTH (primary approach):
+# #   ✅ Selective protection - only specific routes need auth
+# #   ✅ Shared Gateway across multiple teams/applications
+# #   ✅ Different auth configs for different routes
+# #   ✅ More granular control
+# #
+# # NGINX Equivalent (ConfigMap-level):
+# #   global-auth-url: "http://auth-service:9002/auth"
+# #   global-auth-signin: "http://auth-service:9002/signin"
+# #   enable-global-auth: "true"
+# #
+# # ============================================================================
+
+# ---
+# # ============================================================================
+# # DEDICATED GATEWAY - For Gateway-Level SecurityPolicy
+# # ============================================================================
+# # Create a dedicated Gateway for globally-protected routes.
+# # This allows a single SecurityPolicy to protect all routes on the Gateway.
+# # ============================================================================
+# apiVersion: gateway.networking.k8s.io/v1
+# kind: Gateway
+# metadata:
+#   name: global-auth-gateway
+#   namespace: ingress2envoygateway
+#   annotations:
+#     cert-manager.io/cluster-issuer: ${CLUSTER_ISSUER}
+# spec:
+#   gatewayClassName: eg
+#   listeners:
+#   - name: https
+#     protocol: HTTPS
+#     port: 443
+#     hostname: "global-auth.${DOMAIN}"
+#     tls:
+#       mode: Terminate
+#       certificateRefs:
+#       - name: gateway-tls-cert
+#         kind: Secret
+#     allowedRoutes:
+#       namespaces:
+#         from: Same
+#   - name: http
+#     protocol: HTTP
+#     port: 80
+#     hostname: "global-auth.${DOMAIN}"
+#     allowedRoutes:
+#       namespaces:
+#         from: Same
+
+# ---
+# # ============================================================================
+# # HTTPRoute - Routes attached to the dedicated global-auth-gateway
+# # ============================================================================
+# # Note: The authentication comes from the SecurityPolicy targeting the
+# # Gateway (below), not this HTTPRoute. All routes on the Gateway are protected.
+# # ============================================================================
+# apiVersion: gateway.networking.k8s.io/v1
+# kind: HTTPRoute
+# metadata:
+#   name: global-auth-route
+#   namespace: ingress2envoygateway
+#   labels:
+#     app: global-auth
+#     reference: supplementary
+# spec:
+#   parentRefs:
+#   - name: global-auth-gateway
+#     namespace: ingress2envoygateway
+#     sectionName: https
+#   hostnames:
+#   - "global-auth.${DOMAIN}"
+#   rules:
+#   # All paths go to backend - auth is enforced at Gateway level
+#   - matches:
+#     - path:
+#         type: PathPrefix
+#         value: /
+#     backendRefs:
+#     - name: echo-server
+#       port: 8080
+
+# ---
+# # ============================================================================
+# # SecurityPolicy - Targets GATEWAY (not HTTPRoute)
+# # ============================================================================
+# # KEY DIFFERENCE FROM PRIMARY TEST (00-security-policy-extauth.yaml):
+# #   - Primary:      SecurityPolicy → HTTPRoute (selective protection)
+# #   - This example: SecurityPolicy → Gateway (global protection)
+# #
+# # RESULT:
+# #   ALL routes attached to the Gateway inherit authentication
+# #   automatically without needing individual SecurityPolicy per HTTPRoute.
+# #
+# # Envoy Gateway Documentation:
+# #   https://gateway.envoyproxy.io/docs/tasks/security/ext-auth/
+# # ============================================================================
+# apiVersion: gateway.envoyproxy.io/v1alpha1
+# kind: SecurityPolicy
+# metadata:
+#   name: global-ext-auth-policy
+#   namespace: ingress2envoygateway
+#   labels:
+#     app: global-auth
+#     reference: supplementary
+# spec:
+#   targetRefs:
+#     # ========================================================================
+#     # TARGET: Gateway (protects ALL routes on this Gateway)
+#     # ========================================================================
+#     - group: gateway.networking.k8s.io
+#       kind: Gateway
+#       name: global-auth-gateway
+#     
+#     # ========================================================================
+#     # Alternative: Target HTTPRoute (selective protection)
+#     # ========================================================================
+#     # Uncomment to target specific HTTPRoute instead:
+#     # - group: gateway.networking.k8s.io
+#     #   kind: HTTPRoute
+#     #   name: global-auth-route
+#   
+#   # External Authentication - applies to all routes on the Gateway
+#   extAuth:
+#     http:
+#       backendRefs:
+#         - name: http-ext-auth
+#           port: 9002
+#       headersToBackend:
+#         - "x-current-user"
+#         - "authorization"
+
+# ---
+# # ============================================================================
+# # ALTERNATIVE: Gateway-Level JWT Authentication
+# # ============================================================================
+# # JWT auth can also be applied at Gateway level for API Gateways
+# # where all endpoints require token validation.
+# # ============================================================================
+# # apiVersion: gateway.envoyproxy.io/v1alpha1
+# # kind: SecurityPolicy
+# # metadata:
+# #   name: global-jwt-auth-policy
+# #   namespace: ingress2envoygateway
+# # spec:
+# #   targetRefs:
+# #     - group: gateway.networking.k8s.io
+# #       kind: Gateway
+# #       name: global-auth-gateway
+# #   jwt:
+# #     providers:
+# #     - name: oidc-provider
+# #       issuer: "${OIDC_ISSUER_URL}"
+# #       audiences:
+# #       - "${OIDC_CLIENT_ID}"
+# #       remoteJWKS:
+# #         uri: "${OIDC_JWKS_URL}"
+
+# ---
+# # ============================================================================
+# # ALTERNATIVE: Gateway-Level OIDC Authentication
+# # ============================================================================
+# # OIDC auth can also be applied at Gateway level for web applications
+# # where all pages require login.
+# # ============================================================================
+# # apiVersion: gateway.envoyproxy.io/v1alpha1
+# # kind: SecurityPolicy
+# # metadata:
+# #   name: global-oidc-auth-policy
+# #   namespace: ingress2envoygateway
+# # spec:
+# #   targetRefs:
+# #     - group: gateway.networking.k8s.io
+# #       kind: Gateway
+# #       name: global-auth-gateway
+# #   oidc:
+# #     clientID: "${OIDC_CLIENT_ID}"
+# #     clientSecret:
+# #       name: oidc-client-secret
+# #     provider:
+# #       issuer: "${OIDC_ISSUER_URL}"
+# #     redirectURL: "https://global-auth.${DOMAIN}/oauth2/callback"
+# #     scopes:
+# #     - "openid"
+# #     - "profile"
+# #     - "email"
+
+# ============================================================================
+# TEST COMMANDS (if resources are uncommented and deployed)
+# ============================================================================
+#
+# Prerequisites:
+#   1. Uncomment and deploy the Gateway, HTTPRoute, and SecurityPolicy above
+#   2. Deploy the http-ext-auth service (from 01-apps-and-namespace/)
+#   3. Wait for Gateway to get an external IP
+#
+# Get Gateway IP:
+#   GATEWAY_IP=$(kubectl get gateway global-auth-gateway -n ingress2envoygateway \
+#     -o jsonpath='{.status.addresses[0].value}')
+#
+# Test without auth (should fail - 403):
+#   curl -v --resolve "global-auth.${DOMAIN}:443:${GATEWAY_IP}" \
+#     https://global-auth.${DOMAIN}/
+#
+# Test with valid auth header (should pass - 200):
+#   curl -v --resolve "global-auth.${DOMAIN}:443:${GATEWAY_IP}" \
+#     -H "Authorization: Bearer token1" \
+#     https://global-auth.${DOMAIN}/
+#
+# Test any path (all protected by Gateway-level policy):
+#   curl --resolve "global-auth.${DOMAIN}:443:${GATEWAY_IP}" \
+#     https://global-auth.${DOMAIN}/any/path/here
+#   # → 403 Forbidden (no auth header)
+#
+# ============================================================================
+# COMPARISON: GATEWAY-LEVEL vs HTTPROUTE-LEVEL
+# ============================================================================
+#
+# Gateway-Level SecurityPolicy:
+#   targetRefs:
+#   - kind: Gateway        ← Protects ALL routes on Gateway
+#     name: global-auth-gateway
+#
+# HTTPRoute-Level SecurityPolicy:
+#   targetRefs:
+#   - kind: HTTPRoute      ← Protects only THIS route
+#     name: specific-route
+#
+# ============================================================================
+# WHEN TO USE EACH APPROACH
+# ============================================================================
+#
+# Gateway-Level (this pattern):
+#   • Dedicated Gateway per application/team
+#   • All routes require identical auth
+#   • Simpler configuration
+#   • Matches NGINX global-auth-url
+#
+# HTTPRoute-Level (primary tests):
+#   • Shared Gateway across teams
+#   • Mixed public/private routes
+#   • Different auth per route
+#   • More granular control
+#
+# ============================================================================

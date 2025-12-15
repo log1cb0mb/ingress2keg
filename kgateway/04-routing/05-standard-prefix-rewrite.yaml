@@ -1,0 +1,140 @@
+# Standard Gateway API Prefix Rewrite Test
+# ═══════════════════════════════════════════════════════════════════════════
+# 
+# Purpose: Demonstrate PORTABLE prefix rewrite using standard Gateway API
+#          (works with any Gateway API implementation, not just KGateway)
+#
+# Comparison:
+#   - THIS FILE: Standard Gateway API (HTTPRoute.URLRewrite.ReplacePrefixMatch)
+#   - 03-regex-rewrite-test.yaml: KGateway-specific (TrafficPolicy.urlRewrite.pathRegex)
+#
+# NGINX Equivalent:
+#   nginx.ingress.kubernetes.io/rewrite-target: /api/backend/$1
+#   (when $1 is just the suffix after prefix match - no regex capture groups)
+#
+# ═══════════════════════════════════════════════════════════════════════════
+
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: standard-prefix-rewrite-route
+  namespace: ingress2kgateway
+  labels:
+    app: standard-rewrite-test
+    test-type: gateway-api-standard
+    portability: upstream-compatible
+spec:
+  parentRefs:
+  - name: external-gateway
+    namespace: ingress2kgateway
+    sectionName: https
+  
+  hostnames:
+  - "i2g.${DOMAIN}"
+  
+  rules:
+  # ═══════════════════════════════════════════════════════════════════════
+  # Test Route: Standard Gateway API Prefix Rewrite
+  # ═══════════════════════════════════════════════════════════════════════
+  #
+  # Transformation:
+  #   /api/standard/prefix/hello  →  /api/rewritten/hello
+  #   /api/standard/prefix/a/b/c  →  /api/rewritten/a/b/c
+  #
+  # ═══════════════════════════════════════════════════════════════════════
+  - matches:
+    - path:
+        type: PathPrefix
+        value: "/api/standard/prefix/"
+    
+    filters:
+    - type: URLRewrite
+      urlRewrite:
+        path:
+          type: ReplacePrefixMatch
+          replacePrefixMatch: "/api/rewritten/"
+    
+    backendRefs:
+    - name: echo-server
+      port: 8080
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # Test Route: Host Header Rewrite (upstream-vhost equivalent)
+  # ═══════════════════════════════════════════════════════════════════════
+  #
+  # NGINX Equivalent:
+  #   nginx.ingress.kubernetes.io/upstream-vhost: backend.internal.svc
+  #
+  # Gateway API: URLRewrite.hostname (Standard, preferred over RequestHeaderModifier)
+  #
+  # Note: RequestHeaderModifier cannot set "Host" header directly in some
+  #       implementations. URLRewrite.hostname is the standard way to change
+  #       the Host header sent to the backend.
+  #
+  # Transformation:
+  #   Request Host: i2g.${DOMAIN}
+  #   Backend sees: internal-backend.local
+  #
+  # ═══════════════════════════════════════════════════════════════════════
+  - matches:
+    - path:
+        type: PathPrefix
+        value: "/api/standard/vhost/"
+    
+    filters:
+    - type: URLRewrite
+      urlRewrite:
+        hostname: "internal-backend.local"
+    
+    backendRefs:
+    - name: echo-server
+      port: 8080
+
+# ═══════════════════════════════════════════════════════════════════════════
+# COMPARISON: Two Ways to Do Path Rewrite
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# ┌─────────────────────────────────────────────────────────────────────────┐
+# │ METHOD 1: Standard Gateway API (THIS FILE)                              │
+# │ ────────────────────────────────────────────────────────────────────────│
+# │ API: gateway.networking.k8s.io/v1 HTTPRoute                             │
+# │ Portability: ✅ Works with ANY Gateway API implementation               │
+# │                                                                         │
+# │ Supports:                                                               │
+# │   • ReplacePrefixMatch: /old/prefix/* → /new/prefix/*                  │
+# │   • ReplaceFullPath: /any/path → /fixed/path                           │
+# │                                                                         │
+# │ Limitation: No capture groups ($1, $2)                                  │
+# └─────────────────────────────────────────────────────────────────────────┘
+#
+# ┌─────────────────────────────────────────────────────────────────────────┐
+# │ METHOD 2: KGateway TrafficPolicy (03-regex-rewrite-test.yaml)           │
+# │ ────────────────────────────────────────────────────────────────────────│
+# │ API: gateway.kgateway.dev/v1alpha1 TrafficPolicy                        │
+# │ Portability: ❌ KGateway-specific (vendor lock-in)                      │
+# │                                                                         │
+# │ Supports:                                                               │
+# │   • Regex pattern matching with capture groups                          │
+# │   • Substitution using \1, \2 (RE2 syntax)                              │
+# │                                                                         │
+# │ Example:                                                                │
+# │   pattern: "/api/feedback/([^/]+)/impl/([^/]+)"                        │
+# │   substitution: "/backend/feedback/\1/implementation/\2"                │
+# └─────────────────────────────────────────────────────────────────────────┘
+#
+# ═══════════════════════════════════════════════════════════════════════════
+# RECOMMENDATION
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Use Standard Gateway API when:
+#   • Simple prefix replacement is sufficient
+#   • Portability across implementations is important
+#   • Migration path to other Gateway API providers is needed
+#
+# Use KGateway TrafficPolicy when:
+#   • Regex capture groups are required
+#   • Complex path transformations are needed
+#   • Committed to KGateway as the implementation
+#
+# ═══════════════════════════════════════════════════════════════════════════

@@ -1,0 +1,33 @@
+# HTTPRoute for External Auth Testing (Tests 1-2)
+# ============================================================================
+# Separate route to avoid SecurityPolicy conflicts
+# Only ext-auth-policy attaches to this route
+# ============================================================================
+
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: extauth-test-route
+  namespace: ingress2envoygateway
+  labels:
+    app: extauth-test
+    test: "1-2"
+spec:
+  parentRefs:
+  - name: external-gateway
+    namespace: ingress2envoygateway
+    sectionName: https
+  
+  hostnames:
+  - "eg.${DOMAIN}"
+  
+  rules:
+  # External auth test path
+  - matches:
+    - path:
+        type: PathPrefix
+        value: "/api/extauth/"
+    backendRefs:
+    - name: echo-server
+      port: 8080

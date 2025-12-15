@@ -1,0 +1,71 @@
+# Test 25: Server Snippet - HTTP Rejection with Custom JSON Error
+# NGINX: server-snippet + ssl-redirect: 'false'
+# Envoy Gateway: HTTPRouteFilter.directResponse via ExtensionRef
+
+---
+# HTTPRoute targeting HTTP listener for specific hosts
+# More specific hostname = higher priority than wildcard redirect
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: http-reject-api-hosts
+  namespace: ingress2envoygateway
+  labels:
+    test: server-snippet-25
+spec:
+  parentRefs:
+  - name: external-gateway
+    namespace: ingress2envoygateway
+    sectionName: http  # Target HTTP listener only
+  
+  # Specific API hosts that reject HTTP (instead of redirect)
+  # These take precedence over *.${DOMAIN} wildcard in 00-http-redirect.yaml
+  hostnames:
+  - "api-reject.${DOMAIN}"
+  
+  rules:
+  - filters:
+    - type: ExtensionRef
+      extensionRef:
+        group: gateway.envoyproxy.io
+        kind: HTTPRouteFilter
+        name: http-reject-json
+    backendRefs: []  # No backend needed - direct response handles it
+
+---
+# HTTPS route for api-reject host (works normally)
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: api-reject-https-route
+  namespace: ingress2envoygateway
+spec:
+  parentRefs:
+  - name: external-gateway
+    namespace: ingress2envoygateway
+    sectionName: https
+  
+  hostnames:
+  - "api-reject.${DOMAIN}"
+  
+  rules:
+  - matches:
+    - path:
+        type: PathPrefix
+        value: /
+    backendRefs:
+    - name: echo-server
+      port: 8080
+
+# Test 25 Validation:
+# HTTP request (should get 400 with JSON):
+#   curl -v http://api-reject.${DOMAIN}/
+#   Expected: 400 Bad Request with JSON body
+#
+# HTTPS request (should work normally):
+#   curl https://api-reject.${DOMAIN}/
+#   Expected: 200 OK from echo-server
+#
+# Other hosts (should redirect):
+#   curl -v http://eg.${DOMAIN}/
+#   Expected: 301 redirect to HTTPS

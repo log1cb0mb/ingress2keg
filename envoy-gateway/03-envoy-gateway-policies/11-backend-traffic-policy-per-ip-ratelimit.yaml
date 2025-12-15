@@ -1,0 +1,149 @@
+# Per-IP Rate Limiting (Source Address Based)
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# NGINX Annotations:
+#   nginx.ingress.kubernetes.io/limit-rps: "5"
+#   nginx.ingress.kubernetes.io/limit-connections: "10"  # Per IP connections
+#   (NGINX applies rate limits per-IP by default via $binary_remote_addr)
+#
+# Envoy Gateway:
+#   BackendTrafficPolicy.rateLimit.local with:
+#   - clientSelectors.sourceCIDR.type: Distinct
+#   Each unique source IP gets its own rate limit bucket!
+#
+# Docs: https://gateway.envoyproxy.io/docs/tasks/traffic/local-rate-limit/
+#
+# ═══════════════════════════════════════════════════════════════════════════════
+# TEST COMMANDS:
+#
+#   # From IP 1 (simulate with X-Forwarded-For or real client):
+#   for i in {1..10}; do
+#     curl -s -o /dev/null -w "%{http_code}\n" \
+#       -H "X-Forwarded-For: 192.168.1.100" \
+#       https://eg.${DOMAIN}/api/ratelimit-per-ip/test
+#   done
+#   # Expected: First 5 → 200, next 5 → 429
+#
+#   # From IP 2 (different source IP, independent limit):
+#   for i in {1..10}; do
+#     curl -s -o /dev/null -w "%{http_code}\n" \
+#       -H "X-Forwarded-For: 192.168.1.200" \
+#       https://eg.${DOMAIN}/api/ratelimit-per-ip/test
+#   done
+#   # Expected: First 5 → 200, next 5 → 429 (independent bucket!)
+#
+# ═══════════════════════════════════════════════════════════════════════════════
+
+---
+# HTTPRoute for per-IP rate limiting endpoint
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: ratelimit-per-ip-route
+  namespace: ingress2envoygateway
+  labels:
+    test-case: ratelimit-per-ip
+spec:
+  parentRefs:
+  - name: external-gateway
+    sectionName: https  # IMPORTANT: Attach only to HTTPS listener
+  hostnames:
+  - "eg.${DOMAIN}"
+  rules:
+  - matches:
+    - path:
+        type: PathPrefix
+        value: /api/ratelimit-per-ip/
+    backendRefs:
+    - name: echo-server
+      port: 8080
+
+---
+# BackendTrafficPolicy for Per-Source-Address Rate Limiting
+# Each unique source IP gets its own rate limit bucket
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: per-ip-ratelimit-policy
+  namespace: ingress2envoygateway
+  labels:
+    test-case: ratelimit-per-ip
+spec:
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: ratelimit-per-ip-route
+  rateLimit:
+    type: Local
+    local:
+      rules:
+      # Rule 1: Per-source-IP rate limiting
+      # The "type: Distinct" ensures each unique IP address has a separate rate limit counter
+      - clientSelectors:
+        - sourceCIDR:
+            value: "0.0.0.0/0"  # Match all IPs
+            type: Distinct      # Each unique IP gets its own rate limit bucket!
+        limit:
+          requests: 5           # 5 requests per second per IP
+          unit: Second
+      # Rule 2: Global fallback limit (optional)
+      # Ensures total traffic doesn't exceed a global limit regardless of source
+      - limit:
+          requests: 100         # 100 requests per second globally
+          unit: Second
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# How Per-IP Rate Limiting Works:
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Without type: Distinct (Global Rate Limiting):
+#   - All requests share ONE rate limit bucket
+#   - If limit is 5/second, 5 requests from ANY IPs hit the limit
+#   - IP A: 3 requests, IP B: 2 requests → BOTH start getting 429
+#
+# With type: Distinct (Per-IP Rate Limiting):
+#   - Each unique source IP has ITS OWN rate limit bucket
+#   - If limit is 5/second per IP:
+#     - IP A can make 5 requests/second
+#     - IP B can also make 5 requests/second (independent!)
+#     - Total: 10 requests/second from 2 IPs
+#   - This is how NGINX behaves by default!
+#
+# ═══════════════════════════════════════════════════════════════════════════════
+# NGINX → Envoy Gateway Comparison
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# NGINX Ingress:
+#   nginx.ingress.kubernetes.io/limit-rps: "5"
+#   nginx.ingress.kubernetes.io/limit-connections: "10"
+#   nginx.ingress.kubernetes.io/limit-burst-multiplier: "2"
+#   # NGINX uses $binary_remote_addr by default → per-IP rate limiting
+#
+# Envoy Gateway (Global - NOT per-IP):
+#   rateLimit.local.rules[].limit.requests: 5
+#   # Without clientSelectors, this is GLOBAL rate limiting
+#
+# Envoy Gateway (Per-IP - matches NGINX behavior):
+#   rateLimit.local.rules[]:
+#   - clientSelectors:
+#     - sourceCIDR:
+#         value: "0.0.0.0/0"
+#         type: Distinct      # ← THIS is the key!
+#     limit:
+#       requests: 5
+#       unit: Second
+#
+# ═══════════════════════════════════════════════════════════════════════════════
+# Important Notes:
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# 1. Requires externalTrafficPolicy: Local on Gateway service
+#    Otherwise, source IP is SNAT'd and all traffic appears from same IP
+#
+# 2. If behind a proxy/CDN, source IP comes from X-Forwarded-For header
+#    Envoy Gateway should preserve this header
+#
+# 3. The global fallback rule (100/second) prevents DoS from many IPs
+#    Each IP gets 5/second, but total cannot exceed 100/second
+#
+# ═══════════════════════════════════════════════════════════════════════════════

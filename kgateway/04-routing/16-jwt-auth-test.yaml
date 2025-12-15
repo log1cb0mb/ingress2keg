@@ -1,0 +1,96 @@
+# JWT Authentication Test Route
+# ═══════════════════════════════════════════════════════════════════════════════
+# Test 26: JWT Authentication (Native KGateway Support)
+#
+# NGINX Equivalent:
+#   No open-source NGINX Ingress support (requires NGINX Plus or ext-auth)
+#
+# KGateway:
+#   GatewayExtension type: JWT + TrafficPolicy.jwt.extensionRef
+#   - Built-in JWT validation
+#   - Remote JWKS with automatic key rotation
+#   - Claim-to-header extraction
+#
+# ═══════════════════════════════════════════════════════════════════════════════
+# TEST COMMANDS:
+#
+#   # Get a JWT token (Azure AD example):
+#   az login
+#   TOKEN=$(az account get-access-token --resource ${OIDC_CLIENT_ID} --query accessToken -o tsv)
+#
+#   # Test without token (should fail - 401):
+#   curl -v https://i2g.${DOMAIN}/api/jwt-auth/test
+#
+#   # Test with valid JWT token (should pass - 200):
+#   curl -H "Authorization: Bearer $TOKEN" https://i2g.${DOMAIN}/api/jwt-auth/test
+#
+#   # Verify JWT claims passed as headers (check response body):
+#   curl -s -H "Authorization: Bearer $TOKEN" https://i2g.${DOMAIN}/api/jwt-auth/test | jq '.headers'
+#   # Expected: "x-jwt-subject", "x-jwt-email", "x-jwt-name", "x-jwt-username"
+#
+# ═══════════════════════════════════════════════════════════════════════════════
+
+---
+# HTTPRoute for JWT auth endpoint
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: jwt-auth-route
+  namespace: ingress2kgateway
+  labels:
+    test-case: jwt-auth
+spec:
+  parentRefs:
+  - name: external-gateway
+    sectionName: https  # Only attach to HTTPS listener, not HTTP
+  hostnames:
+  - "i2g.${DOMAIN}"
+  rules:
+  - matches:
+    - path:
+        type: PathPrefix
+        value: /api/jwt-auth/
+    backendRefs:
+    - name: echo-server
+      port: 8080
+
+---
+# TrafficPolicy with JWT validation
+apiVersion: gateway.kgateway.dev/v1alpha1
+kind: TrafficPolicy
+metadata:
+  name: jwt-auth-policy
+  namespace: ingress2kgateway
+  labels:
+    test-case: jwt-auth
+spec:
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: jwt-auth-route
+  
+  # Reference the JWT GatewayExtension
+  jwt:
+    extensionRef:
+      name: jwt-provider
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# JWT Claims Extraction
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# The JWT GatewayExtension (05-jwt-provider.yaml) extracts these claims:
+#
+# | JWT Claim | Header | Description |
+# |-----------|--------|-------------|
+# | sub | X-JWT-Subject | Subject (user ID) |
+# | email | X-JWT-Email | User's email |
+# | name | X-JWT-Name | User's display name |
+# | preferred_username | X-JWT-Username | Username/UPN |
+#
+# These headers are added to the request before forwarding to backend.
+# The echo-server returns all request headers, so you can verify:
+#
+#   curl -s -H "Authorization: Bearer $TOKEN" \
+#     https://i2g.${DOMAIN}/api/jwt-auth/test | jq '.headers'
+#
+# ═══════════════════════════════════════════════════════════════════════════════

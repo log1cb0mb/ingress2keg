@@ -1,0 +1,28 @@
+# HTTPRoute to redirect all HTTP traffic to HTTPS
+# Matches all hostnames on HTTP listener (port 80)
+# Returns 301 redirect to HTTPS
+
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: http-to-https-redirect
+  namespace: ingress2kgateway
+spec:
+  parentRefs:
+  - name: external-gateway
+    namespace: ingress2kgateway
+    sectionName: http  # Attach to HTTP listener only
+  
+  hostnames:
+  - "*.${DOMAIN}"
+  
+  rules:
+  - filters:
+    - type: RequestRedirect
+      requestRedirect:
+        scheme: https
+        statusCode: 301
+
+# This ensures all HTTP requests are automatically redirected to HTTPS
+# Matches NGINX behavior: nginx.ingress.kubernetes.io/ssl-redirect: 'true'

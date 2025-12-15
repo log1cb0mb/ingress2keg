@@ -1,0 +1,64 @@
+# EnvoyProxy - Customizes the Envoy Proxy deployment and service
+# Ref: https://gateway.envoyproxy.io/docs/api/extension_types/#envoyproxy
+# Ref: https://gateway.envoyproxy.io/docs/tasks/operations/customize-envoyproxy/
+#
+# This is the Envoy Gateway equivalent of KGateway's GatewayParameters
+# Used for Envoy-specific settings not available in standard Gateway API:
+#   - externalTrafficPolicy: Local (preserve client source IP for IP whitelisting)
+#   - Service annotations (Azure internal LB)
+#   - Deployment customizations (replicas, resources, affinity)
+#
+# Note: All implementation-specific config consolidated here for consistency.
+#       Gateway.infrastructure.annotations is portable but we keep config in one place.
+
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: custom-proxy-config
+  namespace: ingress2envoygateway
+spec:
+  provider:
+    type: Kubernetes
+    kubernetes:
+      # Service configuration
+      # Ref: https://gateway.envoyproxy.io/docs/api/extension_types/#kubernetesservicespec
+      envoyService:
+        # externalTrafficPolicy: Local preserves client source IP
+        # Required for IP-based authorization (whitelist-source-range)
+        # Without this, Azure LB SNATs client IP to internal 10.x.x.x
+        externalTrafficPolicy: Local
+        
+        # Azure internal LoadBalancer annotation
+        # NGINX equivalent: service.beta.kubernetes.io/azure-load-balancer-internal: "true"
+        # This could also be set on Gateway.infrastructure.annotations (portable)
+        # but we consolidate all implementation-specific config here for consistency
+        annotations:
+          service.beta.kubernetes.io/azure-load-balancer-internal: "true"
+
+# KGateway equivalent is GatewayParameters:
+# ---
+# apiVersion: gateway.kgateway.dev/v1alpha1
+# kind: GatewayParameters
+# metadata:
+#   name: preserve-source-ip
+# spec:
+#   kube:
+#     service:
+#       externalTrafficPolicy: Local
+#       extraAnnotations:
+#         service.beta.kubernetes.io/azure-load-balancer-internal: "true"
+#
+# NGINX → Envoy Gateway Mapping:
+#   externalTrafficPolicy: Local → EnvoyProxy.provider.kubernetes.envoyService.externalTrafficPolicy
+#   service annotations → EnvoyProxy.provider.kubernetes.envoyService.annotations
+#   (Alternative: Gateway.infrastructure.annotations - portable but we consolidate here)
+#
+# Why externalTrafficPolicy: Local is important:
+# 1. With Cluster (default): Azure LB SNATs client IP → 10.x.x.x internal IP
+# 2. With Local: Azure LB preserves original client IP in X-Forwarded-For
+# 3. Required for SecurityPolicy.authorization with clientCIDRs to work correctly
+#
+# Trade-offs:
+# - Local: Better for IP-based security, but traffic only goes to nodes with pods
+# - Cluster: Better load distribution, but loses client IP

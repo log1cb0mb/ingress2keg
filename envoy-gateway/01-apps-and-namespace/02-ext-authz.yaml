@@ -1,0 +1,120 @@
+# External Authorization Service
+# Node.js HTTP auth service for testing external auth
+# Valid tokens: token1→user1, token2→user2, token3→user3
+# Returns x-current-user header on success
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ext-authz-code
+  namespace: ingress2envoygateway
+data:
+  server.js: |
+    const http = require('http');
+    
+    // Valid tokens mapping to users
+    const validTokens = {
+      'token1': 'user1',
+      'token2': 'user2', 
+      'token3': 'user3'
+    };
+    
+    const server = http.createServer((req, res) => {
+      console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+      console.log('Headers:', JSON.stringify(req.headers, null, 2));
+      
+      // Extract authorization header
+      const authHeader = req.headers['authorization'] || '';
+      const token = authHeader.replace('Bearer ', '');
+      
+      if (validTokens[token]) {
+        const user = validTokens[token];
+        console.log(`Auth SUCCESS for token: ${token} -> user: ${user}`);
+        
+        // Return 200 with user header
+        res.writeHead(200, {
+          'x-current-user': user,
+          'x-auth-status': 'authenticated'
+        });
+        res.end('OK');
+      } else {
+        console.log(`Auth FAILED for token: ${token}`);
+        
+        // Return 403 Forbidden
+        res.writeHead(403, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Unauthorized', message: 'Invalid or missing token' }));
+      }
+    });
+    
+    const PORT = process.env.PORT || 9002;
+    server.listen(PORT, () => {
+      console.log(`Ext-authz HTTP service running on port ${PORT}`);
+      console.log('Valid tokens: token1, token2, token3');
+    });
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ext-authz
+  namespace: ingress2envoygateway
+  labels:
+    app: ext-authz
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ext-authz
+  template:
+    metadata:
+      labels:
+        app: ext-authz
+    spec:
+      containers:
+      - name: ext-authz
+        image: node:18-alpine
+        command: ["node", "/app/server.js"]
+        ports:
+        - containerPort: 9002
+          name: http
+        env:
+        - name: PORT
+          value: "9002"
+        volumeMounts:
+        - name: code
+          mountPath: /app
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 128Mi
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 9002
+            httpHeaders:
+            - name: authorization
+              value: "Bearer token1"
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      volumes:
+      - name: code
+        configMap:
+          name: ext-authz-code
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ext-authz
+  namespace: ingress2envoygateway
+  labels:
+    app: ext-authz
+spec:
+  ports:
+  - port: 9002
+    targetPort: 9002
+    protocol: TCP
+    name: http
+  selector:
+    app: ext-authz

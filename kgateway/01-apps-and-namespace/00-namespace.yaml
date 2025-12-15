@@ -1,0 +1,9 @@
+# Namespace for ingress-to-kgateway migration testing
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ingress2kgateway
+  labels:
+    app: gateway-migration-test
+    environment: development
+    project: ingress-to-gateway-migration

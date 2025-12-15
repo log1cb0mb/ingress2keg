@@ -1,0 +1,52 @@
+# HTTPRoute for App Root Redirect testing
+# NGINX: app-root: /openapi-ui.html
+# Gateway API: Standard HTTPRoute.RequestRedirect (no extension needed!)
+
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: app-root-route
+  namespace: ingress2envoygateway
+  labels:
+    app: app-root-test
+    test: app-root-23
+spec:
+  parentRefs:
+  - name: external-gateway
+    namespace: ingress2envoygateway
+    sectionName: https
+  
+  hostnames:
+  - "approot.${DOMAIN}"
+  
+  rules:
+  # Root path redirect (/) → /docs
+  - matches:
+    - path:
+        type: Exact
+        value: "/"
+    filters:
+    - type: RequestRedirect
+      requestRedirect:
+        path:
+          type: ReplaceFullPath
+          replaceFullPath: "/docs"
+        statusCode: 302
+  
+  # Other paths route to backend normally
+  - matches:
+    - path:
+        type: PathPrefix
+        value: "/"
+    backendRefs:
+    - name: echo-server
+      port: 8080
+
+# Test 23 Validation:
+# 1. Request to / → 302 redirect to /docs
+# 2. Request to /docs → 200 from echo-server
+# 3. Request to /other/path → 200 from echo-server
+#
+# curl -v https://approot.${DOMAIN}/
+# Expected: 302 redirect with Location: /docs

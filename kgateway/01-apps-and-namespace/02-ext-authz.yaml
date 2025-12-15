@@ -1,0 +1,142 @@
+# HTTP External Auth Service
+# Simple Node.js server that validates Bearer tokens and returns x-current-user header
+#
+# ============================================================================
+# HOW IT WORKS
+# ============================================================================
+#
+# Valid tokens: token1 → user1, token2 → user2, token3 → user3
+#
+# Request WITHOUT Authorization header:
+#   curl http://gateway/path
+#   → 403 Forbidden
+#
+# Request WITH valid Authorization header:
+#   curl -H "Authorization: Bearer token1" http://gateway/path
+#   → 200 OK
+#   → x-current-user: user1 (forwarded to backend)
+#
+# ============================================================================
+# PRODUCTION PATTERN COVERAGE
+# ============================================================================
+#
+# NGINX:
+#   nginx.ingress.kubernetes.io/auth-url: https://host/api/accounts/iip/tokenExchange
+#   nginx.ingress.kubernetes.io/auth-response-headers: authorization
+#
+# This validates:
+#   ✅ HTTP-based auth (port 9002)
+#   ✅ Authorization header check (Bearer token pattern)
+#   ✅ Response header forwarding (x-current-user → auth-response-headers)
+#   ✅ pathPrefix configuration
+#
+# ============================================================================
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ext-authz
+  namespace: ingress2kgateway
+data:
+  http-ext-auth.js: |
+    const Http = require("http");
+    
+    const tokens = {
+      "token1": "user1",
+      "token2": "user2",
+      "token3": "user3"
+    };
+    
+    const server = new Http.Server((req, res) => {
+      const authorization = req.headers["authorization"] || "";
+      const extracted = authorization.split(" ");
+      
+      if (extracted.length === 2 && extracted[0] === "Bearer") {
+        const user = checkToken(extracted[1]);
+        console.log(`token: "${extracted[1]}" user: "${user}"`);
+        
+        if (user !== undefined) {
+          // Return x-current-user header on success
+          // Maps to: nginx.ingress.kubernetes.io/auth-response-headers
+          res.writeHead(200, { "x-current-user": user });
+          return res.end();
+        }
+      }
+      
+      console.log(`auth failed - no valid bearer token`);
+      res.writeHead(403, { "content-type": "text/plain" });
+      res.end("Forbidden - invalid or missing Authorization: Bearer token");
+    });
+    
+    const port = process.env.PORT || 9002;
+    server.listen(port);
+    console.log(`HTTP ext-auth server listening on port ${port}`);
+    
+    function checkToken(token) {
+      return tokens[token];
+    }
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ext-authz
+  namespace: ingress2kgateway
+  labels:
+    app: ext-authz
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ext-authz
+  template:
+    metadata:
+      labels:
+        app: ext-authz
+    spec:
+      containers:
+      - name: ext-authz
+        image: node:19-bullseye
+        command:
+        - node
+        - /usr/src/app/http-ext-auth.js
+        ports:
+        - containerPort: 9002
+        volumeMounts:
+        - name: ext-authz-config
+          mountPath: /usr/src/app
+        readinessProbe:
+          httpGet:
+            httpHeaders:
+            - name: authorization
+              value: "Bearer token1"
+            port: 9002
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "100m"
+      volumes:
+      - name: ext-authz-config
+        configMap:
+          name: ext-authz
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ext-authz
+  namespace: ingress2kgateway
+  labels:
+    app: ext-authz
+spec:
+  selector:
+    app: ext-authz
+  ports:
+  - name: http
+    protocol: TCP
+    port: 9002
+    targetPort: 9002

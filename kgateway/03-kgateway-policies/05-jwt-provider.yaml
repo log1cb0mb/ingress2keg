@@ -1,0 +1,182 @@
+# JWT Authentication - Native KGateway Support
+# ═══════════════════════════════════════════════════════════════════════════════
+# 
+# NGINX Annotations:
+#   JWT validation is NOT directly supported in NGINX Ingress open-source.
+#   - NGINX Plus (commercial) supports JWT validation
+#   - Open-source requires external service (oauth2-proxy, ext-auth)
+#
+# KGateway:
+#   Built-in JWT validation via GatewayExtension type: JWT
+#   - No external service required!
+#   - Supports remote JWKS for automatic key rotation
+#   - Claim extraction to headers (claimsToHeaders)
+#   - Multiple JWT providers per GatewayExtension
+#
+# ═══════════════════════════════════════════════════════════════════════════════
+# Configuration (via config.env):
+#   OIDC_ISSUER_URL - Your OIDC provider's issuer URL
+#   OIDC_CLIENT_ID - Your app's client ID (audience for JWT validation)
+#   OIDC_JWKS_URL - JWKS endpoint for token verification
+#   OIDC_PROVIDER_HOST - Host for Backend resource (e.g., login.microsoftonline.com)
+#
+# Supported Providers:
+#   - Azure AD v2: issuer = https://login.microsoftonline.com/<tenant-id>/v2.0
+#   - Azure AD v1: issuer = https://sts.windows.net/<tenant-id>/
+#   - Google: issuer = https://accounts.google.com
+#   - Okta: issuer = https://<org>.okta.com
+#   - Keycloak: issuer = https://<host>/realms/<realm>
+#   - Auth0: issuer = https://<tenant>.<region>.auth0.com
+#
+# TEST COMMANDS:
+#
+#   # Get a JWT token (Azure AD example):
+#   az login
+#   TOKEN=$(az account get-access-token --resource ${OIDC_CLIENT_ID} --query accessToken -o tsv)
+#
+#   # Test without token (should fail - 401):
+#   curl -v https://i2g.${DOMAIN}/api/jwt-auth/test
+#
+#   # Test with valid JWT token (should pass - 200):
+#   curl -v -H "Authorization: Bearer $TOKEN" https://i2g.${DOMAIN}/api/jwt-auth/test
+#
+#   # Verify JWT claims passed as headers:
+#   curl -s -H "Authorization: Bearer $TOKEN" https://i2g.${DOMAIN}/api/jwt-auth/test | jq '.headers'
+#
+# ═══════════════════════════════════════════════════════════════════════════════
+
+---
+# Backend for JWKS server (OIDC provider)
+# KGateway requires a Backend resource to connect to remote JWKS
+apiVersion: gateway.kgateway.dev/v1alpha1
+kind: Backend
+metadata:
+  name: jwks-provider
+  namespace: ingress2kgateway
+  labels:
+    app: jwt-auth
+spec:
+  type: Static
+  static:
+    hosts:
+    - host: ${OIDC_PROVIDER_HOST}  # e.g., login.microsoftonline.com
+      port: 443
+
+---
+# BackendTLSPolicy to validate JWKS server's TLS certificate
+apiVersion: gateway.networking.k8s.io/v1
+kind: BackendTLSPolicy
+metadata:
+  name: jwks-provider-tls
+  namespace: ingress2kgateway
+  labels:
+    app: jwt-auth
+spec:
+  targetRefs:
+  - group: gateway.kgateway.dev
+    kind: Backend
+    name: jwks-provider
+  validation:
+    hostname: ${OIDC_PROVIDER_HOST}
+    wellKnownCACertificates: System
+
+---
+# GatewayExtension for JWT validation
+apiVersion: gateway.kgateway.dev/v1alpha1
+kind: GatewayExtension
+metadata:
+  name: jwt-provider
+  namespace: ingress2kgateway
+  labels:
+    app: jwt-auth
+spec:
+  type: JWT
+  jwt:
+    # Validation mode: Strict (require JWT) or AllowMissing (optional JWT)
+    validationMode: Strict
+    
+    providers:
+    # Primary OIDC provider - configured via config.env
+    - name: oidc-provider
+      # OIDC issuer URL - the 'iss' claim must match
+      # Examples:
+      #   Azure AD v2: https://login.microsoftonline.com/<tenant-id>/v2.0
+      #   Google: https://accounts.google.com
+      #   Okta: https://<org>.okta.com
+      issuer: "${OIDC_ISSUER_URL}"
+      
+      # Expected audience - the 'aud' claim must match
+      audiences:
+      - "${OIDC_CLIENT_ID}"
+      
+      # Remote JWKS for token verification (automatic key rotation)
+      jwks:
+        remote:
+          # Backend resource for JWKS server connection
+          backendRef:
+            group: gateway.kgateway.dev
+            kind: Backend
+            name: jwks-provider
+          # Full JWKS URL
+          url: "${OIDC_JWKS_URL}"
+          # Cache JWKS for 5 minutes (default)
+          cacheDuration: "5m"
+      
+      # Extract claims and pass as headers to backend
+      # These are standard OIDC claims supported by most providers
+      claimsToHeaders:
+      - name: sub
+        header: X-JWT-Subject
+      - name: email
+        header: X-JWT-Email
+      - name: name
+        header: X-JWT-Name
+      - name: preferred_username
+        header: X-JWT-Username
+      
+      # Forward the JWT token to backend
+      forwardToken: true
+      
+      # Token source - look for "Authorization: Bearer <token>" header
+      tokenSource:
+        header:
+          header: Authorization
+          prefix: "Bearer "
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# USAGE: Reference this GatewayExtension in a TrafficPolicy
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# apiVersion: gateway.kgateway.dev/v1alpha1
+# kind: TrafficPolicy
+# metadata:
+#   name: jwt-auth-policy
+#   namespace: ingress2kgateway
+# spec:
+#   targetRefs:
+#   - group: gateway.networking.k8s.io
+#     kind: HTTPRoute
+#     name: jwt-auth-route
+#   jwt:
+#     extensionRef:
+#       name: jwt-provider
+#
+# ═══════════════════════════════════════════════════════════════════════════════
+# Comparison: KGateway vs Envoy Gateway JWT
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# | Feature | KGateway | Envoy Gateway |
+# |---------|----------|---------------|
+# | CRD | GatewayExtension type: JWT | SecurityPolicy.jwt |
+# | JWKS | Backend + BackendTLSPolicy | remoteJWKS (auto TLS) |
+# | Claims to Headers | claimsToHeaders | claimToHeaders |
+# | Token Forward | forwardToken | (automatic with OIDC) |
+# | Validation Mode | validationMode: Strict/AllowMissing | (always strict) |
+# | Token Source | tokenSource.header/queryParameter | (header only) |
+#
+# KGateway advantages:
+#   - validationMode: AllowMissing (optional JWT)
+#   - tokenSource: can extract from query parameter
+#   - More explicit JWKS backend configuration
+#
+# ═══════════════════════════════════════════════════════════════════════════════

@@ -1,0 +1,112 @@
+# BackendTrafficPolicy for comprehensive backend configuration
+# Ref: https://gateway.envoyproxy.io/docs/api/extension_types/#backendtrafficpolicy
+#
+# Implements:
+# - Request Body Size Limit (proxy-body-size)
+# - Rate Limiting (limit-rps, limit-rpm, limit-burst-multiplier)
+# - Retry Policy (proxy-next-upstream-tries)
+# - Timeouts (proxy-read-timeout, proxy-send-timeout, proxy-connect-timeout)
+# - Compression (gzip)
+# - Load Balancing / Session Affinity (affinity, session-cookie-*)
+
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: comprehensive-backend-policy
+  namespace: ingress2envoygateway
+  labels:
+    test: comprehensive
+spec:
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: comprehensive-test-route
+  
+  # 1. Request Body Size Limit
+  # NGINX: proxy-body-size: 10m
+  # Ref: https://gateway.envoyproxy.io/docs/tasks/traffic/client-body-size/
+  requestBuffer:
+    limit: 10Mi  # Max request body size (proxy-body-size equivalent)
+  
+  # 2. Rate Limiting
+  # NGINX: limit-rps: 10, limit-burst-multiplier: 1
+  # Ref: https://gateway.envoyproxy.io/docs/tasks/traffic/local-rate-limit/
+  rateLimit:
+    type: Local
+    local:
+      rules:
+      - limit:
+          requests: 10
+          unit: Second
+  
+  # 3. Retry Policy
+  # NGINX: proxy-next-upstream-tries: 3
+  # Ref: https://gateway.envoyproxy.io/docs/tasks/traffic/retry/
+  retry:
+    numRetries: 3
+    perRetry:
+      backOff:
+        baseInterval: 1s
+        maxInterval: 10s
+      timeout: 2s
+    retryOn:
+      httpStatusCodes:
+      - 503  # Service Unavailable
+      - 502  # Bad Gateway
+      - 504  # Gateway Timeout
+      triggers:
+      - connect-failure
+      - retriable-status-codes
+  
+  # 4. Timeouts
+  # NGINX: proxy-read-timeout: 300, proxy-send-timeout: 300, proxy-connect-timeout: 10
+  # Ref: https://gateway.envoyproxy.io/docs/tasks/traffic/request-timeout/
+  timeout:
+    http:
+      requestTimeout: 300s      # proxy-read-timeout equivalent
+      connectionIdleTimeout: 300s  # proxy-send-timeout equivalent (idle timeout)
+    tcp:
+      connectTimeout: 10s       # proxy-connect-timeout equivalent
+  
+  # 5. Compression
+  # NGINX configuration-snippet: gzip on; gzip_types application/json;
+  # Ref: https://gateway.envoyproxy.io/docs/tasks/traffic/response-compression/
+  compressor:
+  - type: Gzip
+    gzip: {}
+  
+  # 6. Load Balancer / Session Affinity
+  # NGINX: affinity: cookie, session-cookie-name: route, session-cookie-max-age: 172800
+  # Ref: https://gateway.envoyproxy.io/docs/tasks/traffic/load-balancing/
+  loadBalancer:
+    type: ConsistentHash
+    consistentHash:
+      type: Cookie
+      cookie:
+        name: route           # session-cookie-name
+        ttl: 48h              # session-cookie-max-age: 172800 seconds = 48 hours
+        # attributes is map[string]string - all values must be quoted strings
+        attributes:
+          HttpOnly: "false"
+          Secure: "true"
+          SameSite: "Strict"
+
+# Features Summary:
+# 1. Request Body Size (10Mi) - Test 8
+# 2. Rate Limiting (10 RPS) - Test 5
+# 3. Retry (3 attempts on 5xx) - Test 21
+# 4. Timeouts (300s request, 10s connect) - Tests 9, 15
+# 5. Compression (Gzip) - Test 12
+# 6. Session Affinity (Cookie-based) - Test 10
+#
+# NGINX → Envoy Gateway Mapping:
+#   proxy-body-size → requestBuffer.limit
+#   limit-rps → rateLimit.local.rules[].limit.requests (per Second)
+#   limit-rpm → rateLimit.local.rules[].limit.requests (per Minute)
+#   proxy-next-upstream-tries → retry.numRetries
+#   proxy-read-timeout → timeout.http.requestTimeout
+#   proxy-connect-timeout → timeout.tcp.connectTimeout
+#   affinity: cookie → loadBalancer.consistentHash.cookie
+#   session-cookie-name → cookie.name
+#   session-cookie-max-age → cookie.ttl

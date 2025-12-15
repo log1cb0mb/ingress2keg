@@ -1,0 +1,122 @@
+# Standard Gateway API Canary/Traffic Splitting Test
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Purpose: Demonstrate PORTABLE canary deployment using standard Gateway API
+#          (works with any Gateway API implementation, not just Envoy Gateway)
+#
+# This is ALREADY in the comprehensive test route, but having a separate file
+# makes it explicit that this is a standard/portable approach.
+#
+# NGINX Equivalent:
+#   nginx.ingress.kubernetes.io/canary: "true"
+#   nginx.ingress.kubernetes.io/canary-weight: "20"
+#
+# Reference: https://gateway-api.sigs.k8s.io/guides/traffic-splitting/
+#
+# ═══════════════════════════════════════════════════════════════════════════
+
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: standard-canary-route
+  namespace: ingress2envoygateway
+  labels:
+    app: standard-canary-test
+    test-type: gateway-api-standard
+    portability: upstream-compatible
+spec:
+  parentRefs:
+  - name: external-gateway
+    namespace: ingress2envoygateway
+    sectionName: https
+  
+  hostnames:
+  - "eg.${DOMAIN}"
+  
+  rules:
+  # ═══════════════════════════════════════════════════════════════════════
+  # Test Route: Standard Gateway API Traffic Splitting (Canary)
+  # ═══════════════════════════════════════════════════════════════════════
+  #
+  # Traffic Distribution:
+  #   - echo-server (stable): 80%
+  #   - echo-server-canary: 20%
+  #
+  # ═══════════════════════════════════════════════════════════════════════
+  - matches:
+    - path:
+        type: PathPrefix
+        value: "/api/standard/canary/"
+    
+    backendRefs:
+    # Weighted backendRefs for traffic splitting
+    - name: echo-server
+      port: 8080
+      weight: 80                 # 80% to stable
+    
+    - name: echo-server-canary
+      port: 8080
+      weight: 20                 # 20% to canary
+
+# ═══════════════════════════════════════════════════════════════════════════
+# STANDARD GATEWAY API: Traffic Splitting
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# ┌─────────────────────────────────────────────────────────────────────────┐
+# │ Standard Gateway API Weighted BackendRefs                               │
+# │ ────────────────────────────────────────────────────────────────────────│
+# │ API: gateway.networking.k8s.io/v1 HTTPRoute                             │
+# │ Portability: ✅ Works with ANY Gateway API implementation               │
+# │                                                                         │
+# │ Features:                                                               │
+# │   - Weight-based traffic splitting (percentage)                         │
+# │   - Multiple backends per route                                         │
+# │   - Gradual rollout / canary deployments                               │
+# │                                                                         │
+# │ Reference: https://gateway-api.sigs.k8s.io/guides/traffic-splitting/    │
+# └─────────────────────────────────────────────────────────────────────────┘
+#
+# ═══════════════════════════════════════════════════════════════════════════
+# NGINX → Gateway API Canary Mapping
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# NGINX requires two Ingress resources (stable + canary):
+#   Ingress 1: backend: echo-server
+#   Ingress 2: backend: echo-server-canary
+#              annotations:
+#                canary: "true"
+#                canary-weight: "20"
+#
+# Gateway API uses single HTTPRoute with weighted backends:
+#   backendRefs:
+#   - name: echo-server
+#     weight: 80
+#   - name: echo-server-canary  
+#     weight: 20
+#
+# Advantage: Gateway API is cleaner - single resource, explicit weights
+#
+# ═══════════════════════════════════════════════════════════════════════════
+# CANARY STRATEGIES
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# 1. Weight-based (THIS FILE):
+#    - Split traffic by percentage
+#    - Use: Gradual rollout, A/B testing
+#
+# 2. Header-based (add match for specific header):
+#    matches:
+#    - headers:
+#      - name: X-Canary
+#        value: "true"
+#    - Use: Beta testers, internal testing
+#
+# 3. Cookie-based (add match for specific cookie):
+#    matches:
+#    - headers:
+#      - name: Cookie
+#        value: "canary=true"
+#    - Use: Opt-in testing, feature flags
+#
+# ═══════════════════════════════════════════════════════════════════════════
